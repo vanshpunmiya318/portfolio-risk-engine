@@ -1,0 +1,53 @@
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# API keys and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Downloaded market data
+data/raw/
+data/downloads/
+data/cache/
+
+# Temporary files
+*.log
+tmp/
+temp/
+
+# IDE and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+
+# Python package build metadata
+*.egg-info/
+build/
+dist/
