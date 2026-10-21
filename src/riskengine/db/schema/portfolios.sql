@@ -31,3 +31,45 @@ CREATE TABLE IF NOT EXISTS cash_flows (
     source TEXT NOT NULL,
     FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
 );
+
+
+
+CREATE TABLE IF NOT EXISTS corporate_actions (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL,
+    ex_date TEXT NOT NULL,
+    action_type TEXT NOT NULL
+        CHECK (action_type IN ('SPLIT')),
+    ratio REAL NOT NULL
+        CHECK (ratio > 0),
+    source TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+
+    FOREIGN KEY (instrument_id)
+        REFERENCES instruments(id),
+
+    UNIQUE (instrument_id, ex_date, action_type)
+);
+
+
+
+CREATE TABLE IF NOT EXISTS corporate_action_coverage (
+    id INTEGER PRIMARY KEY,
+    instrument_id INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+
+    CHECK (start_date <= end_date),
+
+    FOREIGN KEY (instrument_id)
+        REFERENCES instruments(id),
+
+    UNIQUE (
+        instrument_id,
+        start_date,
+        end_date,
+        source
+    )
+);

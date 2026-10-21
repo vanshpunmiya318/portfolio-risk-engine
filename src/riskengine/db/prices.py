@@ -41,6 +41,10 @@ def add_price(
             volume = excluded.volume,
             source = excluded.source,
             fetched_at = excluded.fetched_at
+            WHERE NOT (
+            prices.source = 'tiingo'
+            AND excluded.source != 'tiingo'
+            )
         """,
         (
             instrument_id,
@@ -144,7 +148,9 @@ def get_latest_prices(
         SELECT
             i.ticker,
             p.date,
-            p.adjusted_close
+            p.close,
+            p.adjusted_close,
+            p.source
         FROM prices AS p
         JOIN instruments AS i
             ON p.instrument_id = i.id
@@ -374,3 +380,39 @@ def get_price_with_max_age(
     "age_days": age_days,
     "is_stale": age_days > 0,
     }
+
+
+
+
+
+def validate_raw_price_sources(connection, instrument_id):
+    """
+    Ensure an instrument's stored prices are suitable for
+    raw-price portfolio valuation.
+
+    Currently, only Tiingo prices are verified as raw
+    historical trading prices.
+    """
+    rows = connection.execute(
+        """
+        SELECT DISTINCT source
+        FROM prices
+        WHERE instrument_id = ?
+        """,
+        (instrument_id,),
+    ).fetchall()
+
+    sources = {row[0] for row in rows}
+
+    if not sources:
+        raise ValueError(
+            f"No price history found for instrument {instrument_id}"
+        )
+
+    if sources != {"tiingo"}:
+        raise ValueError(
+            f"Instrument {instrument_id} has price sources "
+            f"unsuitable for raw-price valuation: {sorted(sources)}"
+        )
+
+    return True

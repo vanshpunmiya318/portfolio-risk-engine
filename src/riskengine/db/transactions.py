@@ -75,16 +75,16 @@ def get_transactions(connection, portfolio_id):
 
 
 
+
 def get_positions(connection, portfolio_id, as_of_date=None):
     query = """
         SELECT
+            t.instrument_id,
             i.ticker,
-            SUM(
-                CASE
-                    WHEN t.transaction_type = 'BUY' THEN t.quantity
-                    WHEN t.transaction_type = 'SELL' THEN -t.quantity
-                END
-            ) AS quantity
+            t.date,
+            t.transaction_type,
+            t.quantity,
+            t.id
         FROM transactions AS t
         JOIN instruments AS i
             ON t.instrument_id = i.id
@@ -97,16 +97,62 @@ def get_positions(connection, portfolio_id, as_of_date=None):
         query += " AND t.date <= ?"
         parameters.append(as_of_date)
 
-    query += """
-        GROUP BY i.id, i.ticker
-        ORDER BY i.ticker
-    """
+    query += " ORDER BY t.date, t.id"
 
-    return pd.read_sql_query(
-        query,
-        connection,
-        params=parameters,
+    transactions = connection.execute(
+        query, parameters
+    ).fetchall()
+
+    positions = {}
+
+    for (
+        instrument_id,
+        ticker,
+        transaction_date,
+        transaction_type,
+        quantity,
+        transaction_id,
+    ) in transactions:
+        signed_quantity = (
+            quantity if transaction_type == "BUY" else -quantity
+        )
+
+        split_query = """
+            SELECT COALESCE(
+                EXP(SUM(LN(ratio))),
+                1.0
+            )
+            FROM corporate_actions
+            WHERE instrument_id = ?
+              AND action_type = 'SPLIT'
+              AND ex_date > ?
+        """
+
+        split_parameters = [instrument_id, transaction_date]
+
+        if as_of_date is not None:
+            split_query += " AND ex_date <= ?"
+            split_parameters.append(as_of_date)
+
+        split_multiplier = connection.execute(
+            split_query, split_parameters
+        ).fetchone()[0]
+
+        positions[ticker] = (
+            positions.get(ticker, 0.0)
+            + signed_quantity * split_multiplier
+        )
+
+    import pandas as pd
+
+    return pd.DataFrame(
+        [
+            {"ticker": ticker, "quantity": quantity}
+            for ticker, quantity in sorted(positions.items())
+        ],
+        columns=["ticker", "quantity"],
     )
+
 
 
 
@@ -115,6 +161,8 @@ def validate_transactions(connection, portfolio_id):
         """
         SELECT
             t.date,
+            t.id,
+            t.instrument_id,
             i.ticker,
             t.transaction_type,
             t.quantity
@@ -128,36 +176,100 @@ def validate_transactions(connection, portfolio_id):
         params=(portfolio_id,),
     )
 
-    positions = {}
+    if transactions.empty:
+        return True
+
+    instrument_ids = transactions["instrument_id"].unique().tolist()
+
+    placeholders = ",".join("?" for _ in instrument_ids)
+
+    splits = pd.read_sql_query(
+        f"""
+        SELECT instrument_id, ex_date, ratio
+        FROM corporate_actions
+        WHERE action_type = 'SPLIT'
+          AND instrument_id IN ({placeholders})
+        ORDER BY ex_date, id
+        """,
+        connection,
+        params=instrument_ids,
+    )
+
+    events = []
 
     for row in transactions.itertuples(index=False):
-        current_quantity = positions.get(row.ticker, 0)
+        events.append(
+            (
+                row.date,
+                1,
+                row.id,
+                row.instrument_id,
+                row.ticker,
+                row.transaction_type,
+                row.quantity,
+            )
+        )
 
-        if row.transaction_type == "BUY":
-            current_quantity += row.quantity
+    for row in splits.itertuples(index=False):
+        events.append(
+            (
+                row.ex_date,
+                0,
+                0,
+                row.instrument_id,
+                None,
+                "SPLIT",
+                row.ratio,
+            )
+        )
+
+    events.sort(key=lambda event: (event[0], event[1], event[2]))
+
+    positions = {}
+    tickers = dict(
+        zip(transactions["instrument_id"], transactions["ticker"])
+    )
+
+    for (
+        event_date,
+        priority,
+        event_id,
+        instrument_id,
+        ticker,
+        event_type,
+        quantity,
+    ) in events:
+        current_quantity = positions.get(instrument_id, 0.0)
+
+        if event_type == "SPLIT":
+            current_quantity *= quantity
+        elif event_type == "BUY":
+            current_quantity += quantity
         else:
-            current_quantity -= row.quantity
+            current_quantity -= quantity
 
-        positions[row.ticker] = current_quantity
+        positions[instrument_id] = current_quantity
 
-        if current_quantity < 0:
+        if current_quantity < -1e-9:
             raise ValueError(
-                f"Negative position detected for {row.ticker}"
+                f"Negative position detected for "
+                f"{tickers[instrument_id]} on {event_date}"
             )
 
     return True
 
 
 
+
 def get_cost_basis(connection, portfolio_id):
-    validate_transactions(
-        connection,
-        portfolio_id,
-        )
+    validate_transactions(connection, portfolio_id)
+
     transactions = pd.read_sql_query(
         """
         SELECT
+            t.id,
             t.date,
+            t.instrument_id,
             i.ticker,
             t.transaction_type,
             t.quantity,
@@ -172,47 +284,123 @@ def get_cost_basis(connection, portfolio_id):
         params=(portfolio_id,),
     )
 
+    if transactions.empty:
+        return pd.DataFrame(
+            columns=["ticker", "quantity", "total_cost", "average_cost"]
+        )
+
+    instrument_ids = transactions["instrument_id"].unique().tolist()
+    placeholders = ",".join("?" for _ in instrument_ids)
+
+    splits = pd.read_sql_query(
+        f"""
+        SELECT id, instrument_id, ex_date, ratio
+        FROM corporate_actions
+        WHERE action_type = 'SPLIT'
+          AND instrument_id IN ({placeholders})
+        ORDER BY ex_date, id
+        """,
+        connection,
+        params=instrument_ids,
+    )
+
+    events = []
+
+    for row in transactions.itertuples(index=False):
+        events.append(
+            (
+                row.date,
+                1,
+                row.id,
+                row.instrument_id,
+                row.ticker,
+                row.transaction_type,
+                row.quantity,
+                row.price,
+            )
+        )
+
+    for row in splits.itertuples(index=False):
+        events.append(
+            (
+                row.ex_date,
+                0,
+                row.id,
+                row.instrument_id,
+                None,
+                "SPLIT",
+                row.ratio,
+                0.0,
+            )
+        )
+
+    events.sort(key=lambda event: (event[0], event[1], event[2]))
+
     positions = {}
     costs = {}
 
-    for row in transactions.itertuples(index=False):
-        current_quantity = positions.get(row.ticker, 0)
-        current_cost = costs.get(row.ticker, 0)
+    tickers = dict(
+        zip(transactions["instrument_id"], transactions["ticker"])
+    )
 
-        if row.transaction_type == "BUY":
-            current_quantity += row.quantity
-            current_cost += row.quantity * row.price
+    for (
+        event_date,
+        priority,
+        event_id,
+        instrument_id,
+        ticker,
+        event_type,
+        quantity,
+        price,
+    ) in events:
+        current_quantity = positions.get(instrument_id, 0.0)
+        current_cost = costs.get(instrument_id, 0.0)
 
-        else:
+        if event_type == "SPLIT":
+            current_quantity *= quantity
+
+        elif event_type == "BUY":
+            current_quantity += quantity
+            current_cost += quantity * price
+
+        elif event_type == "SELL":
             average_cost = current_cost / current_quantity
-            current_quantity -= row.quantity
-            current_cost -= row.quantity * average_cost
+            current_quantity -= quantity
+            current_cost -= quantity * average_cost
 
-        positions[row.ticker] = current_quantity
-        costs[row.ticker] = current_cost
+            if abs(current_quantity) < 1e-9:
+                current_quantity = 0.0
+                current_cost = 0.0
+
+        positions[instrument_id] = current_quantity
+        costs[instrument_id] = current_cost
 
     result = []
 
-    for ticker in sorted(positions):
-        quantity = positions[ticker]
-        total_cost = costs[ticker]
+    for instrument_id in sorted(
+        positions, key=lambda item: tickers[item]
+    ):
+        quantity = positions[instrument_id]
+        total_cost = costs[instrument_id]
 
         average_cost = (
-            total_cost / quantity
-            if quantity > 0
-            else 0
+            total_cost / quantity if quantity > 0 else 0.0
         )
 
         result.append(
             {
-                "ticker": ticker,
+                "ticker": tickers[instrument_id],
                 "quantity": quantity,
                 "total_cost": total_cost,
                 "average_cost": average_cost,
             }
         )
 
-    return pd.DataFrame(result)
+    return pd.DataFrame(
+        result,
+        columns=["ticker", "quantity", "total_cost", "average_cost"],
+    )
+
 
 
 

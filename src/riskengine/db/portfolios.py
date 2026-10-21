@@ -1,3 +1,7 @@
+from riskengine.db.corporate_actions import (
+    validate_corporate_action_coverage,
+)
+
 import pandas as pd
 
 from riskengine.db.prices import get_latest_prices
@@ -176,10 +180,46 @@ def get_portfolio_value(
                 f"on {as_of_date} for: "
                 f"{sorted(stale_tickers)}"
             )
+    
+    for row in result.itertuples(index=False):
+        if row.source != "tiingo":
+            continue
+
+        instrument = connection.execute(
+            "SELECT id FROM instruments WHERE ticker = ?",
+            (row.ticker,),
+        ).fetchone()
+
+        first_trade = connection.execute(
+            """
+            SELECT MIN(date)
+            FROM transactions
+            WHERE portfolio_id = ?
+              AND instrument_id = ?
+              AND date <= ?
+            """,
+            (portfolio_id, instrument[0], as_of_date),
+        ).fetchone()[0]
+
+        validate_corporate_action_coverage(
+            connection,
+            instrument[0],
+            first_trade,
+            as_of_date,
+        )
+
+    result["valuation_price"] = result["adjusted_close"]
+
+    tiingo_rows = result["source"] == "tiingo"
+
+    result.loc[tiingo_rows, "valuation_price"] = (
+        result.loc[tiingo_rows, "close"]
+         )
+
     result["market_value"] = (
-    result["quantity"]
-    * result["adjusted_close"]
-    )
+       result["quantity"] * result["valuation_price"]
+       )
+
 
     result["date"] = pd.to_datetime(
     result["date"]
