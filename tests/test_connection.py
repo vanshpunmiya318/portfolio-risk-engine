@@ -44,6 +44,53 @@ import pytest
 from riskengine.db.connection import get_connection
 from riskengine.db.instruments import get_or_create_instrument
 
+from riskengine.db import instruments as instrument_module
+
+@pytest.fixture(autouse=True)
+def use_test_primary_source(monkeypatch):
+    original_add_instrument = instrument_module.add_instrument
+
+    def add_test_instrument(
+        connection,
+        ticker,
+        name,
+        asset_type,
+        currency,
+        sector=None,
+    ):
+        instrument_id = original_add_instrument(
+            connection,
+            ticker,
+            name,
+            asset_type,
+            currency,
+            sector,
+        )
+
+        connection.execute(
+            """
+            UPDATE instruments
+            SET primary_source = 'test'
+            WHERE id = ?
+            """,
+            (instrument_id,),
+        )
+
+        return instrument_id
+
+    monkeypatch.setattr(
+        instrument_module,
+        "add_instrument",
+        add_test_instrument,
+    )
+
+    # test_connection.py imports add_instrument directly.
+    monkeypatch.setattr(
+        __import__(__name__, fromlist=["add_instrument"]),
+        "add_instrument",
+        add_test_instrument,
+    )
+    
 
 def test_foreign_keys_are_enabled():
     connection = get_connection(":memory:")
@@ -361,14 +408,15 @@ def test_add_price(tmp_path):
         connection.execute(
             """
             INSERT INTO instruments (
-                id,
-                ticker,
-                name,
-                asset_type,
-                currency,
-                sector
+             id,
+             ticker,
+             name,
+             asset_type,
+             currency,
+             sector,
+             primary_source
             )
-            VALUES (1, 'AAPL', 'Apple Inc.', 'EQUITY', 'USD', 'Technology')
+            VALUES (1, 'AAPL', 'Apple Inc.', 'EQUITY', 'USD', 'Technology', 'test')
             """
         )
 
@@ -595,7 +643,7 @@ def test_add_price_updates_existing_date(tmp_path):
             104,
             104,
             1100,
-            "test_updated",
+            "test",
             "2026-01-02T13:00:00",
         )
 
@@ -616,7 +664,7 @@ def test_add_price_updates_existing_date(tmp_path):
         104,
         104,
         1100,
-        "test_updated",
+        "test",
         "2026-01-02T13:00:00",
     )
 
@@ -664,7 +712,7 @@ def test_add_price_returns_same_id_when_existing_date_is_updated(tmp_path):
             104,
             104,
             1100,
-            "test_updated",
+            "test",
             "2026-01-02T13:00:00",
         )
 

@@ -271,7 +271,7 @@ def test_ingest_prices_stores_data(tmp_path, monkeypatch):
             "close": [103.0, 104.0],
             "adjusted_close": [103.0, 104.0],
             "volume": [1000, 1100],
-            "source": ["test", "test"],
+            "source": ["tiingo", "tiingo"],
             "fetched_at": [
                 "2026-01-06T00:00:00+00:00",
                 "2026-01-06T00:00:00+00:00",

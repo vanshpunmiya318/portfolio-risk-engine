@@ -468,6 +468,7 @@ def test_tiingo_prices_are_not_overwritten_by_yahoo(tmp_path):
     from riskengine.db.prices import add_price
 
     with get_connection(db_path) as connection:
+     with pytest.raises(ValueError, match="Price source mismatch"):
         add_price(
             connection=connection,
             instrument_id=instrument_id,

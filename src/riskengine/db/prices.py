@@ -16,7 +16,43 @@ def add_price(
     source,
     fetched_at,
 ):
-    cursor = connection.execute(
+    primary = connection.execute(
+        """
+        SELECT primary_source
+        FROM instruments
+        WHERE id = ?
+        """,
+        (instrument_id,),
+    ).fetchone()
+
+    if primary is None:
+        raise ValueError(
+            f"Unknown instrument_id: {instrument_id}"
+        )
+
+    if source != primary[0]:
+        raise ValueError(
+            f"Price source mismatch for instrument {instrument_id}: "
+            f"primary={primary[0]}, received={source}"
+        )
+
+    existing_source = connection.execute(
+        """
+        SELECT source
+        FROM prices
+        WHERE instrument_id = ? AND date = ?
+        """,
+        (instrument_id, date),
+    ).fetchone()
+
+    if existing_source is not None and existing_source[0] != source:
+        raise ValueError(
+            f"Existing price source conflict for instrument "
+            f"{instrument_id} on {date}: "
+            f"stored={existing_source[0]}, received={source}"
+        )
+
+    connection.execute(
         """
         INSERT INTO prices (
             instrument_id,
@@ -41,10 +77,6 @@ def add_price(
             volume = excluded.volume,
             source = excluded.source,
             fetched_at = excluded.fetched_at
-            WHERE NOT (
-            prices.source = 'tiingo'
-            AND excluded.source != 'tiingo'
-            )
         """,
         (
             instrument_id,
@@ -114,21 +146,78 @@ def get_prices(
 
 
 def add_prices_from_dataframe(connection, instrument_id, data):
-    for row in data.itertuples(index=False):
-        add_price(
-            connection=connection,
-            instrument_id=instrument_id,
-            date=row.date.strftime("%Y-%m-%d"),
-            open_price=row.open,
-            high=row.high,
-            low=row.low,
-            close=row.close,
-            adjusted_close=row.adjusted_close,
-            volume=int(row.volume),
-            source=row.source,
-            fetched_at=row.fetched_at,
+    # Validate every row before writing any of them.
+    primary = connection.execute(
+        """
+        SELECT primary_source
+        FROM instruments
+        WHERE id = ?
+        """,
+        (instrument_id,),
+    ).fetchone()
+
+    if primary is None:
+        raise ValueError(
+            f"Unknown instrument_id: {instrument_id}"
         )
 
+    if not data.empty:
+        invalid_sources = set(data["source"]) - {primary[0]}
+
+        if invalid_sources:
+            raise ValueError(
+                f"Price source mismatch for instrument {instrument_id}: "
+                f"primary={primary[0]}, "
+                f"received={sorted(invalid_sources)}"
+            )
+
+    # Preflight source conflicts so no row is written before
+    # an existing-source conflict is discovered.
+    for row in data.itertuples(index=False):
+        date_value = row.date.strftime("%Y-%m-%d")
+
+        existing = connection.execute(
+            """
+            SELECT source
+            FROM prices
+            WHERE instrument_id = ? AND date = ?
+            """,
+            (instrument_id, date_value),
+        ).fetchone()
+
+        if existing is not None and existing[0] != row.source:
+            raise ValueError(
+                f"Existing price source conflict for instrument "
+                f"{instrument_id} on {date_value}: "
+                f"stored={existing[0]}, received={row.source}"
+            )
+
+    # Savepoint keeps this batch atomic, including when called
+    # inside an existing ingestion transaction.
+    connection.execute("SAVEPOINT price_batch")
+
+    try:
+        for row in data.itertuples(index=False):
+            add_price(
+                connection=connection,
+                instrument_id=instrument_id,
+                date=row.date.strftime("%Y-%m-%d"),
+                open_price=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                adjusted_close=row.adjusted_close,
+                volume=int(row.volume),
+                source=row.source,
+                fetched_at=row.fetched_at,
+            )
+
+        connection.execute("RELEASE SAVEPOINT price_batch")
+
+    except Exception:
+        connection.execute("ROLLBACK TO SAVEPOINT price_batch")
+        connection.execute("RELEASE SAVEPOINT price_batch")
+        raise
 
 
 
@@ -416,3 +505,154 @@ def validate_raw_price_sources(connection, instrument_id):
         )
 
     return True
+
+
+
+
+def get_missing_trading_days(
+    connection,
+    ticker,
+    start_date,
+    end_date,
+    benchmark_ticker="SPY",
+):
+    """
+    Find trading dates on which an instrument has no price.
+
+    The benchmark's stored price dates define the trading
+    calendar. No prices are downloaded by this function.
+
+    This checks the supplied date interval; callers must
+    restrict it to the period when a holding was active.
+    """
+    if end_date < start_date:
+        raise ValueError("End date must not be before start date")
+
+    ticker = normalise_ticker(ticker)
+    benchmark_ticker = normalise_ticker(benchmark_ticker)
+
+    benchmark_dates = get_prices(
+        connection,
+        benchmark_ticker,
+        start_date,
+        end_date,
+    ).index
+
+    if benchmark_dates.empty:
+        raise ValueError(
+            f"No benchmark prices found for {benchmark_ticker} "
+            f"between {start_date} and {end_date}"
+        )
+
+    instrument_dates = get_prices(
+        connection,
+        ticker,
+        start_date,
+        end_date,
+    ).index
+
+    missing_dates = benchmark_dates.difference(instrument_dates)
+
+    return [
+        trading_date.strftime("%Y-%m-%d")
+        for trading_date in missing_dates.sort_values()
+    ]
+
+
+
+
+def get_portfolio_trading_day_gaps(
+    connection,
+    portfolio_id,
+    start_date,
+    end_date,
+    benchmark_ticker="SPY",
+):
+    """
+    Detect missing prices for holdings active on each benchmark
+    trading day.
+
+    Uses split-aware historical positions. A holding is considered
+    active on its purchase date and inactive after a complete sale.
+
+    The benchmark must have stored prices in the requested interval.
+    """
+    from riskengine.db.transactions import (
+        get_positions,
+        validate_transactions,
+    )
+
+    if end_date < start_date:
+        raise ValueError("End date must not be before start date")
+
+    validate_transactions(connection, portfolio_id)
+
+    benchmark_ticker = normalise_ticker(benchmark_ticker)
+
+    benchmark_prices = get_prices(
+        connection,
+        benchmark_ticker,
+        start_date,
+        end_date,
+    )
+
+    if benchmark_prices.empty:
+        raise ValueError(
+            f"No benchmark prices found for {benchmark_ticker} "
+            f"between {start_date} and {end_date}"
+        )
+
+    trading_dates = [
+        value.strftime("%Y-%m-%d")
+        for value in benchmark_prices.index
+    ]
+
+    gaps = []
+
+    for trading_date in trading_dates:
+        positions = get_positions(
+            connection,
+            portfolio_id,
+            as_of_date=trading_date,
+        )
+
+        if positions.empty:
+            continue
+
+        active_tickers = positions.loc[
+            positions["quantity"] > 1e-9,
+            "ticker",
+        ].tolist()
+
+        for ticker in active_tickers:
+            exists = connection.execute(
+                """
+                SELECT 1
+                FROM prices AS p
+                JOIN instruments AS i
+                    ON i.id = p.instrument_id
+                WHERE i.ticker = ?
+                  AND p.date = ?
+                LIMIT 1
+                """,
+                (ticker, trading_date),
+            ).fetchone()
+
+            if exists is None:
+                gaps.append(
+                    {
+                        "date": trading_date,
+                        "ticker": ticker,
+                    }
+                )
+
+    return {
+        "portfolio_id": portfolio_id,
+        "start_date": start_date,
+        "end_date": end_date,
+        "benchmark_ticker": benchmark_ticker,
+        "trading_days_checked": len(trading_dates),
+        "missing_prices": gaps,
+        "missing_count": len(gaps),
+        "is_complete": len(gaps) == 0,
+    }
