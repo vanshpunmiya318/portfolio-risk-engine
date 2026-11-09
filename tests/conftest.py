@@ -16,3 +16,13 @@ def db_connection():
 
     for connection in connections:
         connection.close()
+
+
+
+from pathlib import Path
+import ast
+
+
+def pytest_sessionstart(session):
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    ast.parse(app_path.read_text(encoding="utf-8"), filename=str(app_path))

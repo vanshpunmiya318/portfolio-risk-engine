@@ -22,6 +22,11 @@ def add_transaction(
             "Transaction type must be BUY or SELL"
         )
 
+    if not math.isfinite(float(quantity)) or quantity <= 0:
+        raise ValueError("Transaction quantity must be positive and finite")
+    if not math.isfinite(float(price)) or price <= 0:
+        raise ValueError("Transaction price must be positive and finite")
+
     cursor = connection.execute(
         """
         INSERT INTO transactions (
@@ -259,6 +264,45 @@ def validate_transactions(connection, portfolio_id):
     return True
 
 
+
+
+
+def validate_cash_balances(connection, portfolio_id):
+    """Reject cash deficits on any date after backdated changes.
+
+    Same-day transactions and cash flows are netted together because the
+    schema stores dates, not intraday timestamps.
+    """
+    events = connection.execute(
+        """
+        SELECT date, SUM(amount) AS change
+        FROM (
+            SELECT date,
+                CASE WHEN flow_type = 'DEPOSIT' THEN amount
+                     WHEN flow_type = 'WITHDRAWAL' THEN -amount
+                     ELSE 0 END AS amount
+            FROM cash_flows WHERE portfolio_id = ?
+            UNION ALL
+            SELECT date,
+                CASE WHEN transaction_type = 'BUY' THEN -quantity * price
+                     WHEN transaction_type = 'SELL' THEN quantity * price
+                     ELSE 0 END AS amount
+            FROM transactions WHERE portfolio_id = ?
+        )
+        GROUP BY date
+        ORDER BY date
+        """,
+        (portfolio_id, portfolio_id),
+    ).fetchall()
+
+    cash = 0.0
+    for event_date, change in events:
+        cash += float(change)
+        if cash < -1e-7:
+            raise ValueError(
+                f"Negative cash balance on {event_date}: ${cash:,.2f}"
+            )
+    return True
 
 
 def get_cost_basis(connection, portfolio_id):
