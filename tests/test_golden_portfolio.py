@@ -617,3 +617,53 @@ def test_golden_portfolio_historical_risk(golden_db):
         historical_cvar(expected_returns, confidence=0.95),
         abs=1e-12,
     )
+
+
+
+
+def test_new_purchase_updates_holdings_cash_equity_and_returns(golden_db):
+    connection, instruments, portfolio_id = golden_db
+
+    add_transaction(
+        connection,
+        portfolio_id=portfolio_id,
+        instrument_id=instruments["AAPL"],
+        date="2026-01-06",
+        transaction_type="BUY",
+        quantity=2,
+        price=105,
+        currency="USD",
+        source="test",
+    )
+    connection.commit()
+
+    positions = get_positions(
+        connection, portfolio_id, as_of_date="2026-01-06"
+    ).set_index("ticker")
+
+    assert positions.loc["AAPL", "quantity"] == pytest.approx(12)
+
+    assert get_cash_balance(
+        connection, portfolio_id, as_of_date="2026-01-06"
+    ) == pytest.approx(16790)
+
+    equity_jan6 = get_total_portfolio_equity(
+        connection, portfolio_id, as_of_date="2026-01-06"
+    )
+    equity_jan7 = get_total_portfolio_equity(
+        connection, portfolio_id, as_of_date="2026-01-07"
+    )
+
+    assert equity_jan6 == pytest.approx(20140)
+    assert equity_jan7 == pytest.approx(20215)
+
+    actual_return = get_portfolio_subperiod_return(
+        connection,
+        portfolio_id,
+        previous_date="2026-01-06",
+        current_date="2026-01-07",
+    )
+
+    assert actual_return == pytest.approx(
+        20215 / 20140 - 1
+    )
