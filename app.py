@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from riskengine.risk.attribution import calculate_performance_attribution
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -33,12 +35,24 @@ from riskengine.db.transactions import (
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "reports"
-DATABASE = Path(
-    os.environ.get(
-        "RISKENGINE_DB",
-        str(ROOT / "data" / "historical_portfolio.db"),
-    )
-).expanduser().resolve()
+DEMO_MODE = os.environ.get("RISKENGINE_DEMO", "0") == "1"
+
+DATABASE = (
+    ROOT / "data" / "demo_portfolio.db"
+    if DEMO_MODE
+    else Path(
+        os.environ.get(
+            "RISKENGINE_DB",
+            str(ROOT / "data" / "historical_portfolio.db"),
+        )
+    ).expanduser().resolve()
+)
+
+
+if DEMO_MODE and not DATABASE.exists():
+    from scripts.build_demo_db import build
+
+    build()
 
 st.set_page_config(
     page_title="Portfolio Intelligence",
@@ -142,14 +156,14 @@ page = st.sidebar.radio(
 )
 
 st.sidebar.divider()
-st.sidebar.caption("Historical analysis | 2024–2026")
+st.sidebar.caption("Historical analysis | 2024–2026") 
 st.sidebar.caption("Demonstration portfolio · Not live trading")
 
 
 # Update market data from the existing incremental updater.
 with st.sidebar.expander("Market Data", expanded=True):
     if DATABASE.is_file():
-        with get_connection(DATABASE) as status_connection:
+        with get_connection(DATABASE, read_only=DEMO_MODE) as status_connection:
             latest_by_ticker = pd.read_sql_query(
                 """
                 SELECT i.ticker, MAX(p.date) AS latest_date
@@ -177,7 +191,7 @@ with st.sidebar.expander("Market Data", expanded=True):
     if st.button(
         "Update Market Data",
         key="update_market_data",
-        disabled=not (DATABASE.is_file() and updater_script.is_file()),
+        disabled=DEMO_MODE or not (DATABASE.is_file() and updater_script.is_file()),
         use_container_width=True,
     ):
         with st.spinner("Downloading and validating ETF prices..."):
@@ -210,7 +224,7 @@ with st.sidebar.expander("Market Data", expanded=True):
         st.caption("Missing scripts/update_market_prices.py")
 
 
-with get_connection(DATABASE) as connection:
+with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
     portfolio_row = connection.execute(
         "SELECT id FROM portfolios ORDER BY id LIMIT 1"
     ).fetchone()
@@ -263,7 +277,7 @@ benchmark_prices = load_live_benchmark(
 # Match the original benchmark's starting investment date.
 benchmark_start_date = PORTFOLIO_START_DATE
 
-with get_connection(DATABASE) as connection:
+with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
     benchmark_start_price = connection.execute(
         """
         SELECT p.close
@@ -432,7 +446,7 @@ elif page == "Holdings":
         st.error("Historical portfolio database not found.")
         st.stop()
 
-    with get_connection(DATABASE) as connection:
+    with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
         portfolios = pd.read_sql_query(
             "SELECT id, name FROM portfolios ORDER BY name",
             connection,
@@ -536,7 +550,7 @@ elif page == "Transactions":
         st.error("Portfolio database not found.")
         st.stop()
 
-    with get_connection(DATABASE) as connection:
+    with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
         portfolios = pd.read_sql_query(
             "SELECT id, name FROM portfolios ORDER BY name",
             connection,
@@ -558,7 +572,7 @@ elif page == "Transactions":
         ].iloc[0]
     )
 
-    with get_connection(DATABASE) as connection:
+    with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
         transactions = pd.read_sql_query(
             """
             SELECT
@@ -631,7 +645,11 @@ elif page == "Transactions":
         st.warning("Price data is required before recording trades.")
         st.stop()
 
-    with st.form("add_transaction_form", clear_on_submit=False):
+    with st.form(
+    "add_transaction_form",
+    clear_on_submit=False,
+    enter_to_submit=False,
+        ):
         ticker = st.selectbox(
             "Instrument",
             instruments["ticker"].tolist(),
@@ -672,9 +690,10 @@ elif page == "Transactions":
         submitted = st.form_submit_button(
             "Record Transaction",
             type="primary",
+            disabled=DEMO_MODE,
         )
 
-    if submitted:
+    if submitted and not DEMO_MODE:
         instrument_id = int(
             instruments.loc[
                 instruments["ticker"] == ticker, "id"
@@ -682,7 +701,7 @@ elif page == "Transactions":
         )
 
         try:
-            with get_connection(DATABASE) as connection:
+            with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
                 price_exists = connection.execute(
                     """
                     SELECT 1 FROM prices
@@ -1052,29 +1071,109 @@ elif page == "Reports":
         "Explore the historical portfolio risk report, "
         "benchmark comparison, and performance attribution."
     )
-    report_path = REPORTS / "portfolio_intelligence_report.md"
-    if report_path.exists():
-        st.download_button(
-            "Download Portfolio Intelligence Report",
-            data=report_path.read_bytes(),
-            file_name="portfolio_intelligence_report.md",
-            mime="text/markdown",
+
+    with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
+        attribution = calculate_performance_attribution(
+            connection,
+            active_portfolio_id,
+            latest_date,
         )
 
-    attribution_path = REPORTS / "performance_attribution.png"
-    if attribution_path.exists():
-        st.subheader("Performance Attribution")
-        st.image(str(attribution_path))
+    report_lines = [
+        "# Portfolio Performance Attribution Report",
+        "",
+        f"**Portfolio ID:** {active_portfolio_id}",
+        f"**As-of date:** {latest_date}",
+        "",
+        "## Realized and Unrealized Price Gains",
+        "",
+        "| ETF | Realized (USD) | Unrealized (USD) | Total (USD) |",
+        "|---|---:|---:|---:|",
+    ]
 
-    st.subheader("Available Reports")
-    for name in [
-        "portfolio_intelligence_report.md",
-        "historical_portfolio_risk_report.md",
-        "historical_performance_comparison.md",
-    ]:
-        path = REPORTS / name
-        if path.exists():
-            st.markdown(f"- `{name}`")
+    for _, item in attribution.iterrows():
+        report_lines.append(
+            f"| {item['ticker']} "
+            f"| {item['realized_gain_usd']:,.2f} "
+            f"| {item['unrealized_gain_usd']:,.2f} "
+            f"| {item['gain_usd']:,.2f} |"
+        )
+
+    report_lines.extend([
+        "",
+        f"**Total price gain/loss: ${attribution['gain_usd'].sum():,.2f}**",
+        "",
+        "Method: Average-cost accounting. Includes realized and "
+        "unrealized price gains. Excludes dividends, fees, taxes "
+        "and currency effects.",
+    ])
+
+    st.download_button(
+        "Download Performance Attribution Report",
+        data="\n".join(report_lines),
+        file_name="performance_attribution_report.md",
+        mime="text/markdown",
+    )
+
+    st.subheader("Performance Attribution")
+
+
+    if attribution.empty:
+        st.info("No transactions available for attribution.")
+    else:
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Bar(
+                x=attribution["ticker"],
+                y=attribution["realized_gain_usd"],
+                name="Realized Gain/Loss",
+            )
+        )
+
+        fig.add_trace(
+            go.Bar(
+                x=attribution["ticker"],
+                y=attribution["unrealized_gain_usd"],
+                name="Unrealized Gain/Loss",
+            )
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            barmode="relative",
+            height=430,
+            xaxis_title="ETF",
+            yaxis_title="Gain / Loss (USD)",
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.dataframe(
+            attribution[
+                [
+                    "ticker",
+                    "realized_gain_usd",
+                    "unrealized_gain_usd",
+                    "gain_usd",
+                ]
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        st.metric(
+            "Total Price Gain / Loss",
+            f"${attribution['gain_usd'].sum():,.2f}",
+        )
+
+    st.caption(
+        "Attribution uses average-cost accounting and includes "
+        "realized and unrealized price gains. Excludes dividends, "
+        "fees, taxes and currency effects."
+    )
+
+    
     st.caption(
         "Historical analysis for educational and portfolio "
         "demonstration purposes. Not investment advice."
