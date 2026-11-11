@@ -112,3 +112,27 @@ def test_invalid_trade_does_not_insert(db):
     with pytest.raises(ValueError, match='positive and finite'):
         trade(db, '2024-01-03', 'BUY', 0)
     assert db.execute('SELECT COUNT(*) FROM transactions').fetchone()[0] == 0
+
+
+
+
+
+def test_failed_transaction_validation_rolls_back(db):
+    fund(db)
+    db.commit()
+
+    before_count = db.execute(
+        "SELECT COUNT(*) FROM transactions"
+    ).fetchone()[0]
+
+    with pytest.raises(ValueError, match="Negative cash balance"):
+        with db:
+            trade(db, "2024-01-03", "BUY", 11)
+            validate_cash_balances(db, 1)
+
+    after_count = db.execute(
+        "SELECT COUNT(*) FROM transactions"
+    ).fetchone()[0]
+
+    assert after_count == before_count
+    assert get_cash_balance(db, 1, "2024-01-03") == pytest.approx(1000)
