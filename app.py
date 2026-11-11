@@ -3,6 +3,11 @@ from pathlib import Path
 import subprocess
 import sys
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -28,7 +33,12 @@ from riskengine.db.transactions import (
 
 ROOT = Path(__file__).resolve().parent
 REPORTS = ROOT / "reports"
-DATABASE = ROOT / "data" / "historical_portfolio.db"
+DATABASE = Path(
+    os.environ.get(
+        "RISKENGINE_DB",
+        str(ROOT / "data" / "historical_portfolio.db"),
+    )
+).expanduser().resolve()
 
 st.set_page_config(
     page_title="Portfolio Intelligence",
