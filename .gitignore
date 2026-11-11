@@ -21,6 +21,7 @@ env/
 *.key
 secrets.json
 credentials.json
+.streamlit/secrets.toml
 
 # SQLite databases
 *.db
