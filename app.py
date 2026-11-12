@@ -412,12 +412,43 @@ if page == "Overview":
 
     a.metric("Portfolio Value", f"${portfolio_value:,.2f}")
     b.metric("Total Profit / Loss", f"${profit:,.2f}")
-    c.metric("Cumulative Return", f"{total_return:.2f}%")
+    time_weighted_return = (
+        (1.0 + portfolio_daily_returns).prod() - 1.0
+    ) * 100.0
+
+    c.metric(
+        "Time-Weighted Return",
+        f"{time_weighted_return:.2f}%",
+    )
     d.metric("SPY Benchmark Return", f"{benchmark_return:.2f}%")
 
-    st.subheader("Portfolio Growth vs SPY")
+    st.subheader("Portfolio Performance vs SPY")
+
+    # Cash-flow-adjusted portfolio performance, indexed to 100.
+    portfolio_index = pd.Series(
+        100.0 * (1.0 + portfolio_daily_returns).cumprod(),
+        index=portfolio_daily_returns.index,
+    )
+
+    # Include the initial valuation date at an index value of 100.
+    portfolio_index.loc[pd.Timestamp(data["date"].iloc[0])] = 100.0
+    portfolio_index = portfolio_index.sort_index()
+
+    # SPY benchmark, indexed to the same starting value.
+    benchmark_index = (
+        data["benchmark"]
+        / data["benchmark"].iloc[0]
+        * 100.0
+    )
+
+    comparison = pd.DataFrame({
+        "date": data["date"],
+        "portfolio": data["date"].map(portfolio_index),
+        "benchmark": benchmark_index,
+    })
+
     st.plotly_chart(
-        performance_chart(data),
+        performance_chart(comparison, normalize=True),
         use_container_width=True,
     )
 
