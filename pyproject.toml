@@ -15,6 +15,8 @@ dependencies = [
     "yfinance",
     "streamlit",
     "plotly",
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]
