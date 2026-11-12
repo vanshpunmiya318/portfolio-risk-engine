@@ -19,13 +19,17 @@ The build runs strict TypeScript checking before bundling. Commit the lockfile; 
 
 ## Structure
 
-- `src/App.tsx`: shared shell and seven React Router routes; Overview and future-page placeholders only.
+- `src/App.tsx`: shared shell and seven React Router routes.
+- `src/api/`: typed summary client with runtime response validation.
+- `src/lib/`: currency and calendar-date formatting.
 - `src/pages/`: route content.
 - `src/theme/`: persisted light/dark/system preference, including live OS theme changes.
 - `src/styles/tokens.css`: semantic colors, spacing, typography and shape tokens.
 - `src/styles/base.css`: global primitives and accessibility defaults.
 - `src/styles/shell.css`: responsive shell and placeholder styles.
 
-No backend calls, financial calculations or sample financial data are included. Future services should return calculated data from FastAPI rather than duplicating Python calculations here.
+Overview fetches `/api/portfolio/summary` and displays actual API values, with loading, retryable error and empty states. It performs no financial calculations and includes no sample financial data. Other pages remain placeholders.
 
-Production hosting must serve `index.html` for client-side routes such as `/overview` (SPA fallback). Vite handles this locally. API proxying and authentication are intentionally deferred until backend integration.
+Start FastAPI separately on `127.0.0.1:8000`. The Vite development server proxies `/api` to that address. Run `npm.cmd run dev` and open the printed frontend URL.
+
+Production hosting must serve `index.html` for client-side routes such as `/overview` (SPA fallback), and forward `/api` to FastAPI on the same origin. The development proxy is not a production deployment configuration. Authentication is deferred.

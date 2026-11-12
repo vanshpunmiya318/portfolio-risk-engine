@@ -9,6 +9,8 @@
   --color-accent: #14685c;
   --color-accent-surface: #e8f2ee;
   --color-focus: #237eab;
+  --color-positive: #14685c;
+  --color-negative: #b43838;
   --shadow-panel: 0 12px 40px rgb(24 44 54 / 3%);
   --font-sans: 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', Consolas, monospace;
@@ -35,5 +37,7 @@
   --color-accent: #8ed5bb;
   --color-accent-surface: #203a33;
   --color-focus: #8ac8ee;
+  --color-positive: #8ed5bb;
+  --color-negative: #f3a4a4;
   --shadow-panel: 0 12px 40px rgb(0 0 0 / 10%);
 }
