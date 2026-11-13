@@ -82,12 +82,17 @@ def get_portfolio_value(
     portfolio_id,
     as_of_date,
     max_age_days=None,
+    *,
+    allow_missing_prices=False,
 ):
     """
     Value active portfolio holdings using the latest available prices.
 
     When max_age_days is None, preserve the existing behaviour
     without a maximum price-age restriction.
+
+    allow_missing_prices retains unpriced positions with missing values for
+    callers that explicitly report partial valuations. Default remains strict.
 
     When max_age_days is specified, reject prices older than
     the permitted number of calendar days.
@@ -145,7 +150,7 @@ def get_portfolio_value(
         prices["ticker"]
     )
 
-    if missing_tickers:
+    if missing_tickers and not allow_missing_prices:
         raise ValueError(
             "No price available as of "
             f"{as_of_date} for: "

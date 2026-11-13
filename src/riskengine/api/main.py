@@ -1,11 +1,18 @@
 
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
+
+from riskengine.api.holdings_models import HoldingsResponse
+from riskengine.risk.holdings_service import (
+    get_holdings_summary, PortfolioNotFound, HoldingsInputError, HoldingsDataConflict,
+)
 
 from riskengine.db.connection import get_connection
 from riskengine.db.portfolios import get_total_portfolio_equity
@@ -57,6 +64,35 @@ app = FastAPI(
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/portfolios/{portfolio_id}/holdings", response_model=HoldingsResponse)
+def portfolio_holdings(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+    as_of_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    max_price_age_days: Annotated[int, Query(
+        ge=0, description="Maximum price age in calendar days; 0 requires an exact-date price.",
+    )] = 0,
+):
+    if as_of_date is not None:
+        try:
+            date.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="as_of_date must be a valid YYYY-MM-DD date")
+    db_path = request.app.state.database.path
+    if not db_path.is_file():
+        raise HTTPException(status_code=404, detail="Portfolio database not found")
+    try:
+        with closing(get_connection(db_path, read_only=True)) as connection:
+            connection.execute("BEGIN")  # One consistent read snapshot for every calculation.
+            return get_holdings_summary(connection, portfolio_id, as_of_date, max_price_age_days)
+    except PortfolioNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except HoldingsInputError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except HoldingsDataConflict as error:
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @app.get("/api/portfolio/summary")
