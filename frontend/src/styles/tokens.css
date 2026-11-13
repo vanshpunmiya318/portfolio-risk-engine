@@ -11,6 +11,14 @@
   --color-focus: #237eab;
   --color-positive: #14685c;
   --color-negative: #b43838;
+  --color-warning: #835414;
+  --color-warning-surface: #fff6e8;
+  --color-chart-1: #14685c;
+  --color-chart-2: #3477a2;
+  --color-chart-3: #96712c;
+  --color-chart-4: #7863a3;
+  --color-chart-5: #ae5866;
+  --color-chart-6: #627982;
   --shadow-panel: 0 12px 40px rgb(24 44 54 / 3%);
   --font-sans: 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', Consolas, monospace;
@@ -39,5 +47,13 @@
   --color-focus: #8ac8ee;
   --color-positive: #8ed5bb;
   --color-negative: #f3a4a4;
+  --color-warning: #edc17c;
+  --color-warning-surface: #342b1d;
+  --color-chart-1: #8ed5bb;
+  --color-chart-2: #80b7e0;
+  --color-chart-3: #e4c17c;
+  --color-chart-4: #b5a2df;
+  --color-chart-5: #e49aa5;
+  --color-chart-6: #9db6c0;
   --shadow-panel: 0 12px 40px rgb(0 0 0 / 10%);
 }

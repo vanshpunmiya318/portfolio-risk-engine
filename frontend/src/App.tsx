@@ -1,6 +1,7 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ThemeToggle } from './theme/ThemeProvider';
 import { Overview } from './pages/Overview';
+import { Holdings } from './pages/Holdings';
 
 const pages = [
   { path: '/overview', title: 'Overview' },
@@ -45,7 +46,8 @@ export function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<Overview />} />
-            {pages.slice(1).map((page) => (
+            <Route path="/holdings" element={<Holdings portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
+            {pages.slice(2).map((page) => (
               <Route key={page.path} path={page.path} element={
                 <section className="page-intro"><p className="eyebrow">Workspace / Coming next</p>
                   <h1>{page.title}</h1><p className="lede">This page is reserved for the next stage of migration.</p>
