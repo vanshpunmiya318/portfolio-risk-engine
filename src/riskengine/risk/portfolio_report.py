@@ -124,6 +124,7 @@ def get_portfolio_risk_report(
         confidence=confidence,
         trading_days=trading_days,
         max_age_days=max_age_days,
+        requested_start_date=start_date,
     )
 
     summary["benchmark"] = benchmark_ticker

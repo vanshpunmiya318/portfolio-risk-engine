@@ -6,6 +6,34 @@ import pandas as pd
 TRADING_DAYS = 252
 
 
+def analysis_period_metadata(
+    *, requested_start_date=None, baseline_date=None, first_return_end_date=None,
+    effective_end_date=None, session_coverage_verified=False,
+):
+    """Describe known boundaries without guessing starts or trading sessions."""
+    def iso(value):
+        if value is None:
+            return None
+        timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            raise ValueError("Analysis-period dates cannot be missing timestamps")
+        return timestamp.strftime("%Y-%m-%d")
+
+    return {
+        "requested_start_date": iso(requested_start_date),
+        "effective_baseline_date": iso(baseline_date),
+        "first_return_end_date": iso(first_return_end_date),
+        "effective_end_date": iso(effective_end_date),
+        "session_coverage_verified": session_coverage_verified,
+        "period_metadata_reason": (
+            "Actual common baseline is unavailable; ending dates or requested dates cannot establish it."
+            if baseline_date is None else
+            "Actual boundaries are known; trading-session coverage is unverified."
+            if not session_coverage_verified else None
+        ),
+    }
+
+
 def calculate_performance_metrics(
     returns: pd.Series,
     initial_capital: float = 100_000.0,
@@ -97,9 +125,15 @@ def compare_portfolio_to_benchmark(
     benchmark_returns: pd.Series,
     initial_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
+    *,
+    requested_start_date: str | None = None,
 ) -> dict:
     """
     Compare portfolio and benchmark over identical return dates.
+
+    Compatibility: start_date is the first aligned return ENDING date, not
+    the investment baseline. Ending-date-only Series cannot prove a baseline
+    or matching intervals. Use compare_interval_returns for those guarantees.
     """
 
     portfolio = pd.Series(
@@ -147,4 +181,8 @@ def compare_portfolio_to_benchmark(
         "aligned_observations": len(aligned),
         "start_date": str(aligned.index.min().date()),
         "end_date": str(aligned.index.max().date()),
+        **analysis_period_metadata(
+            requested_start_date=requested_start_date,
+            first_return_end_date=aligned.index.min(), effective_end_date=aligned.index.max(),
+        ),
     }

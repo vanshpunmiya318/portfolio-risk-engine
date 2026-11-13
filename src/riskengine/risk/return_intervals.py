@@ -7,7 +7,7 @@ End-date-only Series cannot establish actual starts, even for later observations
 after filtering. Use explicit starts or one of the connection-based producers.
 """
 from bisect import bisect_left
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from math import isfinite
 from typing import Generic, Iterable, Literal, Sequence, TypeVar
@@ -20,6 +20,7 @@ from riskengine.risk.metrics import portfolio_beta
 from riskengine.risk.performance import (
     calculate_performance_metrics,
     compare_portfolio_to_benchmark,
+    analysis_period_metadata,
 )
 from riskengine.risk.portfolio_returns import get_portfolio_daily_returns
 
@@ -104,6 +105,18 @@ class IntervalResult(Generic[T]):
     baseline_date: date | None = None
     end_date: date | None = None
     observations: int = 0
+    requested_start_date: date | None = None
+    first_return_end_date: date | None = None
+    period_metadata_reason: str | None = None
+    session_coverage_verified: bool = False
+    start_date: date | None = field(init=False)
+    effective_baseline_date: date | None = field(init=False)
+    effective_end_date: date | None = field(init=False)
+
+    def __post_init__(self):
+        object.__setattr__(self, "start_date", self.baseline_date)
+        object.__setattr__(self, "effective_baseline_date", self.baseline_date)
+        object.__setattr__(self, "effective_end_date", self.end_date)
 
 
 def observations_from_series(
@@ -210,43 +223,75 @@ def _series(observations):
                      index=pd.DatetimeIndex([item.end_date for item in observations]), dtype=float)
 
 
+def _period(observations, benchmark=None, requested_start_date=None, verified=False):
+    baseline = observations[0].start_date if observations else None
+    first_end = observations[0].end_date if observations else None
+    end = observations[-1].end_date if observations else None
+    if benchmark is not None:
+        if not benchmark or baseline != benchmark[0].start_date:
+            baseline = None
+        if not benchmark or first_end != benchmark[0].end_date:
+            first_end = None
+        if not benchmark or end != benchmark[-1].end_date:
+            end = None
+    requested = _date(requested_start_date) if requested_start_date is not None else None
+    metadata = analysis_period_metadata(
+        requested_start_date=requested, baseline_date=baseline, first_return_end_date=first_end,
+        effective_end_date=end, session_coverage_verified=verified,
+    )
+    return dict(baseline_date=baseline, end_date=end, requested_start_date=requested,
+                first_return_end_date=first_end, period_metadata_reason=metadata["period_metadata_reason"],
+                session_coverage_verified=verified)
+
+
 def calculate_interval_performance(
     observations: Iterable[ReturnObservation], initial_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
+    *, requested_start_date: date | None = None,
 ) -> IntervalResult[dict]:
     ordered, issues = _validate(observations, "portfolio")
+    period = _period(ordered, requested_start_date=requested_start_date, verified=not issues)
     if issues:
-        return IntervalResult("insufficient_coverage", reasons=tuple(issues))
+        return IntervalResult("insufficient_coverage", reasons=tuple(issues), **period)
     return IntervalResult("ok", calculate_performance_metrics(_series(ordered), initial_capital, risk_free_rate),
-                          baseline_date=ordered[0].start_date, end_date=ordered[-1].end_date, observations=len(ordered))
+                          observations=len(ordered), **period)
 
 
 def compare_interval_returns(
     portfolio: Iterable[ReturnObservation], benchmark: Iterable[ReturnObservation],
     initial_capital: float = 100_000.0, risk_free_rate: float = 0.0,
+    *, requested_start_date: date | None = None,
 ) -> IntervalResult[dict]:
     portfolio, benchmark, issues = _align(portfolio, benchmark)
+    period = _period(portfolio, benchmark, requested_start_date, verified=not issues)
     if issues:
-        return IntervalResult("insufficient_coverage", reasons=issues)
-    # Legacy metrics and successful dictionary structures remain unchanged.
+        return IntervalResult("insufficient_coverage", reasons=issues, **period)
+    # Financial values are unchanged; this new comparison reports the baseline
+    # while the legacy function retains its ending-date start_date convention.
     value = compare_portfolio_to_benchmark(_series(portfolio), _series(benchmark), initial_capital, risk_free_rate)
-    return IntervalResult("ok", value, baseline_date=portfolio[0].start_date,
-                          end_date=portfolio[-1].end_date, observations=len(portfolio))
+    value.update(analysis_period_metadata(
+        requested_start_date=period["requested_start_date"], baseline_date=period["baseline_date"],
+        first_return_end_date=period["first_return_end_date"], effective_end_date=period["end_date"],
+        session_coverage_verified=True,
+    ))
+    value["start_date"] = value["effective_baseline_date"]
+    return IntervalResult("ok", value, observations=len(portfolio), **period)
 
 
 def interval_beta(
     portfolio: Iterable[ReturnObservation], benchmark: Iterable[ReturnObservation],
+    *, requested_start_date: date | None = None,
 ) -> IntervalResult[float]:
     portfolio, benchmark, issues = _align(portfolio, benchmark)
+    period = _period(portfolio, benchmark, requested_start_date, verified=not issues)
     if issues:
-        return IntervalResult("insufficient_coverage", reasons=issues)
+        return IntervalResult("insufficient_coverage", reasons=issues, **period)
     try:
         value = portfolio_beta(_series(portfolio), _series(benchmark))
     except ValueError as error:
         if str(error) != "Benchmark variance must be positive":
             raise
-        return IntervalResult("undefined_metric", reasons=(CoverageIssue("zero_benchmark_variance", str(error), "benchmark"),))
+        return IntervalResult("undefined_metric", reasons=(CoverageIssue("zero_benchmark_variance", str(error), "benchmark"),), **period)
     if not isfinite(value):
-        return IntervalResult("undefined_metric", reasons=(CoverageIssue("nonfinite_beta", "Beta is not finite.", "both"),))
-    return IntervalResult("ok", value, baseline_date=portfolio[0].start_date,
-                          end_date=portfolio[-1].end_date, observations=len(portfolio))
+        return IntervalResult("undefined_metric", reasons=(CoverageIssue("nonfinite_beta", "Beta is not finite.", "both"),), **period)
+    return IntervalResult("ok", value, observations=len(portfolio), **period)

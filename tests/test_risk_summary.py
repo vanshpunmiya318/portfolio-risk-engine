@@ -35,7 +35,11 @@ def test_risk_summary_golden_portfolio(golden_db):
 
     assert result["portfolio_id"] == portfolio_id
     assert result["observations"] == 4
-    assert result["start_date"] == "2026-01-06"
+    assert result["start_date"] == "2026-01-05"
+    assert result["effective_baseline_date"] == "2026-01-05"
+    assert result["first_return_end_date"] == "2026-01-06"
+    assert result["requested_start_date"] is None
+    assert result["effective_end_date"] == "2026-01-09"
     assert result["end_date"] == "2026-01-09"
     assert result["beta"] is None
 

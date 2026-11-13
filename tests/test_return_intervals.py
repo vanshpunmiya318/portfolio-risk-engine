@@ -51,8 +51,12 @@ def test_complete_daily_metrics_and_success_dictionary_are_unchanged():
                 pd.testing.assert_series_equal(result.value[side][key], value)
             else:
                 assert result.value[side][key] == value
-    for key in set(old) - {"portfolio", "benchmark"}:
+    metadata_keys = {"start_date", "requested_start_date", "effective_baseline_date", "first_return_end_date",
+                     "effective_end_date", "period_metadata_reason", "session_coverage_verified"}
+    for key in set(old) - {"portfolio", "benchmark"} - metadata_keys:
         assert result.value[key] == old[key]
+    assert result.value["start_date"] == "2026-01-05"
+    assert old["start_date"] == "2026-01-06"  # Compatibility convention stays explicit.
     assert interval_beta(p, b).value == portfolio_beta(ps, bs)
     standalone = calculate_interval_performance(p)
     assert standalone.status == "ok"
