@@ -161,7 +161,8 @@ def get_positions(connection, portfolio_id, as_of_date=None):
 
 
 
-def validate_transactions(connection, portfolio_id):
+def validate_transactions(connection, portfolio_id, as_of_date=None):
+    """Validate share balances through an inclusive ISO date, or all history."""
     transactions = pd.read_sql_query(
         """
         SELECT
@@ -175,10 +176,11 @@ def validate_transactions(connection, portfolio_id):
         JOIN instruments AS i
             ON t.instrument_id = i.id
         WHERE t.portfolio_id = ?
+          AND (? IS NULL OR t.date <= ?)
         ORDER BY t.date, t.id
         """,
         connection,
-        params=(portfolio_id,),
+        params=(portfolio_id, as_of_date, as_of_date),
     )
 
     if transactions.empty:
@@ -194,10 +196,11 @@ def validate_transactions(connection, portfolio_id):
         FROM corporate_actions
         WHERE action_type = 'SPLIT'
           AND instrument_id IN ({placeholders})
+          AND (? IS NULL OR ex_date <= ?)
         ORDER BY ex_date, id
         """,
         connection,
-        params=instrument_ids,
+        params=[*instrument_ids, as_of_date, as_of_date],
     )
 
     events = []
@@ -305,8 +308,13 @@ def validate_cash_balances(connection, portfolio_id):
     return True
 
 
-def get_cost_basis(connection, portfolio_id):
-    validate_transactions(connection, portfolio_id)
+def get_cost_basis(connection, portfolio_id, as_of_date=None):
+    """Return remaining average-cost basis through an inclusive ISO date.
+
+    With no cutoff, preserve full-history accounting. Splits precede trades
+    on the same date, and trades retain their existing ID ordering.
+    """
+    validate_transactions(connection, portfolio_id, as_of_date)
 
     transactions = pd.read_sql_query(
         """
@@ -322,10 +330,11 @@ def get_cost_basis(connection, portfolio_id):
         JOIN instruments AS i
             ON t.instrument_id = i.id
         WHERE t.portfolio_id = ?
+          AND (? IS NULL OR t.date <= ?)
         ORDER BY t.date, t.id
         """,
         connection,
-        params=(portfolio_id,),
+        params=(portfolio_id, as_of_date, as_of_date),
     )
 
     if transactions.empty:
@@ -342,10 +351,11 @@ def get_cost_basis(connection, portfolio_id):
         FROM corporate_actions
         WHERE action_type = 'SPLIT'
           AND instrument_id IN ({placeholders})
+          AND (? IS NULL OR ex_date <= ?)
         ORDER BY ex_date, id
         """,
         connection,
-        params=instrument_ids,
+        params=[*instrument_ids, as_of_date, as_of_date],
     )
 
     events = []

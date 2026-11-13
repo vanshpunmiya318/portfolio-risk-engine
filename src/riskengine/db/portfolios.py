@@ -109,6 +109,7 @@ def get_portfolio_value(
     validate_transactions(
         connection,
         portfolio_id,
+        as_of_date,
     )
 
     positions = get_positions(

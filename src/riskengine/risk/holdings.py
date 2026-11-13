@@ -46,7 +46,7 @@ def load_portfolio_holdings(
         if valuations.empty:
             return pd.DataFrame()
 
-        costs = get_cost_basis(connection, portfolio_id)
+        costs = get_cost_basis(connection, portfolio_id, as_of_date)
 
         metadata = pd.read_sql_query(
             """
