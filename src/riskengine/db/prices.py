@@ -575,6 +575,10 @@ def get_portfolio_trading_day_gaps(
     Uses split-aware historical positions. A holding is considered
     active on its purchase date and inactive after a complete sale.
 
+    Validate all transaction/split history through end_date, inclusive.
+    Earlier history establishes positions; events after the cutoff cannot
+    invalidate this historical coverage check.
+
     The benchmark must have stored prices in the requested interval.
     """
     from riskengine.db.transactions import (
@@ -585,7 +589,7 @@ def get_portfolio_trading_day_gaps(
     if end_date < start_date:
         raise ValueError("End date must not be before start date")
 
-    validate_transactions(connection, portfolio_id)
+    validate_transactions(connection, portfolio_id, as_of_date=end_date)
 
     benchmark_ticker = normalise_ticker(benchmark_ticker)
 

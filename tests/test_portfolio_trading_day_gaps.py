@@ -1,5 +1,9 @@
 import pytest
 
+from test_golden_portfolio import golden_db
+from test_benchmark import golden_spy_db
+from riskengine.risk.portfolio_report import get_portfolio_risk_report
+
 from riskengine.db.connection import get_connection
 from riskengine.db.schema.loader import create_schema
 from riskengine.db.portfolios import add_portfolio
@@ -7,6 +11,7 @@ from riskengine.db.instruments import add_instrument
 from riskengine.db.transactions import (
     add_transaction,
     get_positions,
+    validate_transactions,
 )
 from riskengine.db.prices import (
     add_price,
@@ -114,6 +119,106 @@ def test_missing_price_while_holding_is_detected(portfolio_database):
     ]
     assert result["missing_count"] == 1
     assert result["is_complete"] is False
+
+
+def test_future_invalid_sale_does_not_block_valid_earlier_coverage(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-08", 10)
+        sell(connection, portfolio_id, aapl_id, "2026-01-12", 11)
+        with pytest.raises(ValueError, match="2026-01-12"):
+            validate_transactions(connection, portfolio_id)
+        result = check_gaps(connection, portfolio_id)
+    assert result == {
+        "portfolio_id": portfolio_id, "start_date": "2026-01-05", "end_date": "2026-01-09",
+        "benchmark_ticker": "SPY", "trading_days_checked": 5,
+        "missing_prices": [], "missing_count": 0, "is_complete": True,
+    }
+
+
+def test_future_invalid_sale_does_not_hide_genuine_in_period_gap(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-05", 10)
+        sell(connection, portfolio_id, aapl_id, "2026-01-12", 11)
+        result = check_gaps(connection, portfolio_id)
+    assert result["is_complete"] is False
+    assert result["missing_prices"] == [{"date": "2026-01-07", "ticker": "AAPL"}]
+
+
+@pytest.mark.parametrize("trade_date", ["2026-01-02", "2026-01-05", "2026-01-07", "2026-01-09"])
+def test_invalid_history_before_start_and_through_end_is_still_validated(portfolio_database, trade_date):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-01", 10)
+        sell(connection, portfolio_id, aapl_id, trade_date, 11)
+        with pytest.raises(ValueError, match=trade_date):
+            check_gaps(connection, portfolio_id)
+
+
+def test_requested_cutoff_includes_trades_even_after_last_benchmark_observation(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-08", 10)
+        sell(connection, portfolio_id, aapl_id, "2026-01-10", 11)
+        assert check_gaps(connection, portfolio_id)["is_complete"] is True
+        with pytest.raises(ValueError, match="2026-01-10"):
+            get_portfolio_trading_day_gaps(connection, portfolio_id, "2026-01-05", "2026-01-10")
+
+
+def test_pre_start_trades_continue_to_establish_coverage_requirements(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-02", 10)
+        sell(connection, portfolio_id, aapl_id, "2026-01-06", 4)
+        result = check_gaps(connection, portfolio_id)
+    assert result["missing_prices"] == [{"date": "2026-01-07", "ticker": "AAPL"}]
+
+
+def test_cutoff_day_split_and_sale_are_included(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-08", 10)
+        connection.execute(
+            "INSERT INTO corporate_actions (instrument_id,ex_date,action_type,ratio,source,fetched_at) "
+            "VALUES (?,'2026-01-09','SPLIT',2,'test','2026-01-09T00:00:00Z')", (aapl_id,),
+        )
+        sell(connection, portfolio_id, aapl_id, "2026-01-09", 20)
+        assert check_gaps(connection, portfolio_id)["is_complete"] is True
+        sell(connection, portfolio_id, aapl_id, "2026-01-09", 1)
+        with pytest.raises(ValueError, match="2026-01-09"):
+            check_gaps(connection, portfolio_id)
+
+
+def test_future_split_and_invalid_sale_do_not_affect_earlier_check(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        buy(connection, portfolio_id, aapl_id, "2026-01-08", 10)
+        connection.execute(
+            "INSERT INTO corporate_actions (instrument_id,ex_date,action_type,ratio,source,fetched_at) "
+            "VALUES (?,'2026-01-12','SPLIT',0.5,'test','2026-01-12T00:00:00Z')", (aapl_id,),
+        )
+        sell(connection, portfolio_id, aapl_id, "2026-01-12", 6)
+        assert check_gaps(connection, portfolio_id)["is_complete"] is True
+        with pytest.raises(ValueError, match="2026-01-12"):
+            get_portfolio_trading_day_gaps(connection, portfolio_id, "2026-01-05", "2026-01-12")
+
+
+def test_other_portfolio_invalid_transactions_are_not_included(portfolio_database):
+    db_path, portfolio_id, aapl_id = portfolio_database
+    with get_connection(db_path) as connection:
+        other_id = add_portfolio(connection, "Other portfolio", "USD")
+        sell(connection, other_id, aapl_id, "2026-01-05", 1)
+        assert check_gaps(connection, portfolio_id)["is_complete"] is True
+
+
+def test_historical_risk_report_is_unchanged_after_future_invalid_trade(golden_spy_db):
+    connection, portfolio_id = golden_spy_db
+    baseline = get_portfolio_risk_report(connection, portfolio_id, "2026-01-05", "2026-01-09")
+    instrument_id = connection.execute("SELECT id FROM instruments WHERE ticker = 'AAPL'").fetchone()[0]
+    sell(connection, portfolio_id, instrument_id, "2026-01-12", 1000)
+    actual = get_portfolio_risk_report(connection, portfolio_id, "2026-01-05", "2026-01-09")
+    assert actual == baseline
 
 
 def test_prices_before_purchase_are_not_required(portfolio_database):
