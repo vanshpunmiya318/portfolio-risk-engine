@@ -1,25 +1,36 @@
+import math
+
 import pandas as pd
 
 from riskengine.risk.performance import calculate_performance_metrics
 
 
 def calculate_live_risk_metrics(frame, portfolio_returns=None):
-    prices = frame[["portfolio", "benchmark"]].astype(float)
+    """Risk from explicitly supplied cash-flow-adjusted investment returns.
 
+    Callers should use get_portfolio_daily_returns(). An equity frame cannot
+    establish external cash flows, so it is never a substitute for returns.
+    Missing, incomplete or invalid returns produce undefined floats (NaN),
+    preserving the existing keys and undefined-metric representation. Valid
+    supplied returns retain the existing formulas and metric conventions.
+    """
+    undefined = {key: float("nan") for key in
+                 ("volatility", "drawdown", "sharpe", "var", "cvar", "beta")}
     if portfolio_returns is None:
-        portfolio_returns = pd.Series(
-            prices["portfolio"].to_numpy(),
-            index=pd.DatetimeIndex(frame["date"]),
-            dtype=float,
-        ).pct_change().dropna()
-    else:
-        portfolio_returns = pd.Series(
-            portfolio_returns, dtype=float
-        ).dropna()
+        return undefined
+    try:
+        portfolio_returns = pd.Series(portfolio_returns, dtype=float)
+    except (TypeError, ValueError, OverflowError):
+        return undefined
+    if (len(portfolio_returns) < 2 or portfolio_returns.index.has_duplicates
+            or portfolio_returns.isna().any()
+            or not all(math.isfinite(value) for value in portfolio_returns)
+            or (portfolio_returns < -1).any()):
+        return undefined
 
     benchmark_returns = (
         pd.Series(
-            prices["benchmark"].to_numpy(),
+            frame["benchmark"].to_numpy(dtype=float),
             index=pd.to_datetime(frame["date"]),
             dtype=float,
         )
@@ -35,9 +46,6 @@ def calculate_live_risk_metrics(frame, portfolio_returns=None):
         axis=1,
         join="inner",
     ).dropna()
-
-    if len(portfolio_returns) < 2:
-      raise ValueError("Insufficient portfolio data for risk calculations")
 
     performance = calculate_performance_metrics(
         portfolio_returns,
