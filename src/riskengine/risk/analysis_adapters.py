@@ -58,7 +58,9 @@ class _Adapter:
         reasons = []
         if not coverage.calendar_verified:
             reasons.append(_reason("unknown_calendar", "Daily metrics require verified trading-session coverage.", scope))
-        if coverage.complete is not True or not coverage.daily_eligible:
+        # daily_eligible is the preparation bundle's legacy >=2-observation
+        # flag. Validate coverage here, then apply each metric's own minimum.
+        if coverage.complete is not True:
             reasons.append(_reason("insufficient_coverage", "The complete requested window is not eligible for daily analytics.", scope))
         if not intervals:
             reasons.append(_reason("empty_returns", "No adjusted return observations are available.", scope))
@@ -77,7 +79,8 @@ class _Adapter:
         metrics = None
         if not reasons:
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-                result = calculate_interval_performance(intervals, initial_capital=1.0, risk_free_rate=0.0)
+                result = calculate_interval_performance(intervals, initial_capital=1.0, risk_free_rate=0.0,
+                                                        minimum_observations=1)
             if result.status == "ok":
                 metrics = result.value
             else:
@@ -88,6 +91,10 @@ class _Adapter:
         intervals, _, unavailable = self.data[scope if scope != "comparison" else "portfolio"]
         if reasons:
             unavailable = reasons
+        minimum = 2 if name in {"annualized_volatility", "sharpe_ratio", "beta"} else 1
+        if len(intervals) < minimum and not any(item.code in {"insufficient_observations", "not_applicable"} for item in unavailable):
+            unavailable = (*unavailable, _reason("insufficient_observations",
+                                                f"{name} requires at least {minimum} observations; received {len(intervals)}.", scope))
         if name == "sharpe_ratio" and _finite(value):
             values = self.data[scope][1]
             if values is not None and not _finite(values["annualized_volatility"]):
@@ -120,11 +127,14 @@ class _Adapter:
         p = self.prepared
         reasons = ()
         value = None
-        if not p.comparison_eligible or any(self.data[side][2] for side in ("portfolio", "benchmark")):
+        # The preparation comparison flag also includes the old >=2 minimum.
+        # Recheck both complete windows, currencies and exact interval matches.
+        if p.benchmark_currency != p.currency or any(self.data[side][2] for side in ("portfolio", "benchmark")):
             reasons = (_reason("comparison_unavailable", "Both complete series must cover equivalent verified one-session intervals in the same currency.", "comparison"),)
         else:
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-                result = compare_interval_returns(p.portfolio_intervals, p.benchmark_intervals, initial_capital=1.0)
+                result = compare_interval_returns(p.portfolio_intervals, p.benchmark_intervals, initial_capital=1.0,
+                                                 minimum_observations=1)
             if result.status == "ok":
                 value = result.value
                 self.comparison_valid = True

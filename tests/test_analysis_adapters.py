@@ -14,8 +14,10 @@ from riskengine.api.analysis_models import MetricValue, PerformanceResponse, Ris
 from riskengine.risk.analysis_adapters import build_performance_response, build_risk_response
 from riskengine.risk.analysis_service import prepare_analysis
 from riskengine.risk.metrics import historical_var, historical_cvar, portfolio_beta
-from riskengine.risk.performance import calculate_performance_metrics
-from riskengine.risk.return_intervals import VerifiedSessionCalendar
+from riskengine.risk.performance import calculate_performance_metrics, compare_portfolio_to_benchmark
+from riskengine.risk.return_intervals import (
+    VerifiedSessionCalendar, calculate_interval_performance, compare_interval_returns,
+)
 
 
 CALENDAR = VerifiedSessionCalendar(tuple(date(2026, 1, day) for day in range(5, 10)), "Explicit synthetic test sessions")
@@ -299,3 +301,134 @@ def test_historical_window_metric_parity_with_explicit_test_sessions():
     assert r.portfolio_metrics.beta.value == portfolio_beta(series(prepared.portfolio_intervals), series(prepared.benchmark_intervals))
     check_json(p)
     check_json(r)
+
+
+def sampled_window(prepared, count):
+    """A complete PreparedAnalysis fixture with real baseline/interval boundaries."""
+    valuations = prepared.valuations[:count + 1]
+    end = valuations[-1].date
+    period = replace(prepared.period, selected_end_date=end, effective_end_date=end,
+                     first_return_end_date=valuations[1].date if count else None)
+
+    def coverage(value):
+        return replace(value, expected_sessions=count + 1, expected_intervals=count,
+                       valuation_count=count + 1, valid_valuation_count=count + 1,
+                       interval_count=count, complete=True, daily_eligible=count >= 2)
+
+    return replace(prepared, period=period, valuations=valuations,
+                   portfolio_intervals=prepared.portfolio_intervals[:count],
+                   benchmark_intervals=prepared.benchmark_intervals[:count],
+                   portfolio_coverage=coverage(prepared.portfolio_coverage),
+                   benchmark_coverage=coverage(prepared.benchmark_coverage), comparison_eligible=count >= 2)
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_metric_specific_zero_one_two_observation_minimums(verified, count):
+    data = sampled_window(verified, count)
+    p, r = build_performance_response(data), build_risk_response(data)
+    if count == 0:
+        assert p.portfolio_metrics.cumulative_return.value is None
+        assert p.portfolio_metrics.annualized_return.value is None
+        assert r.portfolio_metrics.maximum_drawdown.value is None
+        assert r.portfolio_metrics.historical_var.value is None
+        assert r.portfolio_metrics.historical_cvar.value is None
+        assert not p.wealth_index.portfolio.points
+        assert "insufficient_observations" in {reason.code for reason in p.portfolio_metrics.cumulative_return.unavailable_reasons}
+    else:
+        returns = series(data.portfolio_intervals)
+        expected = calculate_performance_metrics(returns, initial_capital=1., minimum_observations=1)
+        assert p.portfolio_metrics.cumulative_return.value == expected["cumulative_return"]
+        assert p.portfolio_metrics.annualized_return.value == expected["annualized_return"]
+        assert r.portfolio_metrics.maximum_drawdown.value == expected["max_drawdown"]
+        assert r.portfolio_metrics.historical_var.value == historical_var(returns)
+        assert r.portfolio_metrics.historical_cvar.value == historical_cvar(returns)
+        assert len(p.wealth_index.portfolio.points) == count + 1
+        assert p.wealth_index.portfolio.points[0].date == data.period.effective_baseline_date
+        assert p.wealth_index.portfolio.points[0].value == 1
+        assert p.comparison.excess_cumulative_return.value is not None
+    if count < 2:
+        for metric in (r.portfolio_metrics.annualized_volatility, r.portfolio_metrics.sharpe_ratio, r.portfolio_metrics.beta):
+            assert metric.value is None
+            assert "insufficient_observations" in {reason.code for reason in metric.unavailable_reasons}
+    else:
+        old = calculate_performance_metrics(series(data.portfolio_intervals), initial_capital=1.)
+        assert r.portfolio_metrics.annualized_volatility.value == old["annualized_volatility"]
+        assert r.portfolio_metrics.sharpe_ratio.value == old["sharpe_ratio"]
+        assert r.portfolio_metrics.beta.value == portfolio_beta(series(data.portfolio_intervals), series(data.benchmark_intervals))
+    check_json(p)
+    check_json(r)
+
+
+@pytest.mark.parametrize("value", [-.0077069, 0., .01, -1.])
+def test_single_interval_growth_drawdown_and_tail_behavior(verified, value):
+    data = sampled_window(verified, 1)
+    data = replace(data, portfolio_intervals=(replace(data.portfolio_intervals[0], return_value=value),))
+    p, r = build_performance_response(data), build_risk_response(data)
+    assert p.portfolio_metrics.cumulative_return.value == pytest.approx(value)
+    assert p.portfolio_metrics.annualized_return.value == (1 + p.portfolio_metrics.cumulative_return.value) ** 252 - 1
+    assert r.portfolio_metrics.maximum_drawdown.value == pytest.approx(max(0, -value))
+    assert r.portfolio_metrics.historical_var.value == -value
+    assert r.portfolio_metrics.historical_cvar.value == -value
+    assert r.drawdown.portfolio.points[0].value == 0
+    assert r.drawdown.portfolio.points[-1].value == r.portfolio_metrics.maximum_drawdown.value
+    assert r.portfolio_metrics.sharpe_ratio.unavailable_reasons[0].code == "insufficient_observations"
+    check_json(p)
+    check_json(r)
+
+
+@pytest.mark.parametrize("defect", ["calendar", "sessions", "complete", "baseline", "multi_session"])
+def test_single_interval_path_never_relaxes_coverage(verified, defect):
+    data = sampled_window(verified, 1)
+    if defect == "calendar":
+        data = replace(data, portfolio_coverage=replace(data.portfolio_coverage, calendar_verified=False))
+    elif defect == "sessions":
+        data = replace(data, portfolio_intervals=(replace(data.portfolio_intervals[0], trading_sessions=None),))
+    elif defect == "complete":
+        data = replace(data, portfolio_coverage=replace(data.portfolio_coverage, complete=False))
+    elif defect == "baseline":
+        data = replace(data, portfolio_intervals=(replace(data.portfolio_intervals[0], start_date=None),))
+    else:
+        data = replace(data, portfolio_intervals=(replace(data.portfolio_intervals[0], trading_sessions=2),))
+    response = build_performance_response(data)
+    assert response.portfolio_metrics.cumulative_return.value is None
+    assert response.portfolio_metrics.annualized_return.value is None
+    assert not response.wealth_index.portfolio.points
+    assert response.comparison.excess_cumulative_return.value is None
+
+
+def test_legacy_primitive_minimums_remain_two_and_opt_in_does_not_emit_nan(verified):
+    data = sampled_window(verified, 1)
+    returns = series(data.portfolio_intervals)
+    with pytest.raises(ValueError, match="At least two"):
+        calculate_performance_metrics(returns)
+    with pytest.raises(ValueError, match="Insufficient overlapping"):
+        compare_portfolio_to_benchmark(returns, returns)
+    assert calculate_interval_performance(data.portfolio_intervals).status == "insufficient_coverage"
+    assert compare_interval_returns(data.portfolio_intervals, data.benchmark_intervals).status == "insufficient_coverage"
+    result = calculate_interval_performance(data.portfolio_intervals, minimum_observations=1)
+    assert result.status == "ok"
+    assert result.value["annualized_volatility"] is None
+    assert result.value["sharpe_ratio"] is None
+    assert compare_interval_returns(data.portfolio_intervals, data.benchmark_intervals, minimum_observations=1).status == "ok"
+
+
+def test_historical_single_interval_minus_point_77069_percent_case():
+    from riskengine.db.connection import get_connection
+    path = Path(__file__).resolve().parents[1] / "data" / "historical_portfolio.db"
+    if not path.is_file():
+        pytest.skip("Historical database is not present")
+    calendar = VerifiedSessionCalendar((date(2024, 1, 2), date(2024, 1, 3)), "Explicit two-session historical test fixture")
+    with closing(get_connection(path, read_only=True)) as connection:
+        connection.execute("BEGIN")
+        data = prepare_analysis(connection, 1, start_date="2024-01-02", end_date="2024-01-03", session_calendar=calendar)
+    response = build_performance_response(data)
+    assert data.portfolio_coverage.complete and not data.portfolio_coverage.daily_eligible
+    assert response.portfolio_metrics.cumulative_return.value == pytest.approx(-.0077069)
+    assert response.portfolio_metrics.annualized_return.value == (1 + data.portfolio_intervals[0].return_value) ** 252 - 1
+    assert response.portfolio_metrics.annualized_volatility.value is None
+    assert response.portfolio_metrics.sharpe_ratio.value is None
+    assert response.period.effective_baseline_date == date(2024, 1, 2)
+    assert [p.date for p in response.wealth_index.portfolio.points] == [date(2024, 1, 2), date(2024, 1, 3)]
+    # The existing benchmark producer still requires three price observations.
+    assert response.benchmark_metrics.cumulative_return.value is None
+    check_json(response)

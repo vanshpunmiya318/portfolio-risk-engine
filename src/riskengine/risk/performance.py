@@ -38,12 +38,16 @@ def calculate_performance_metrics(
     returns: pd.Series,
     initial_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
+    *,
+    minimum_observations: int = 2,
 ) -> dict:
     """
     Calculate investment performance from daily simple returns.
 
     Returns must represent consecutive trading-day observations.
     The equity curve starts at initial_capital.
+    The opt-in one-observation path supports growth/drawdown; sample volatility
+    and Sharpe remain undefined until two observations. Legacy defaults stay 2.
     """
 
     if initial_capital <= 0 or not np.isfinite(initial_capital):
@@ -54,8 +58,11 @@ def calculate_performance_metrics(
 
     returns = pd.Series(returns, dtype=float).sort_index()
 
-    if len(returns) < 2:
-        raise ValueError("At least two daily returns are required")
+    if isinstance(minimum_observations, bool) or minimum_observations not in (1, 2):
+        raise ValueError("minimum_observations must be 1 or 2")
+    if len(returns) < minimum_observations:
+        raise ValueError("At least two daily returns are required" if minimum_observations == 2
+                         else "At least one daily return is required")
 
     if returns.index.has_duplicates:
         raise ValueError("Return dates must be unique")
@@ -76,6 +83,7 @@ def calculate_performance_metrics(
 
     annualized_volatility = (
         returns.std(ddof=1) * np.sqrt(TRADING_DAYS)
+        if len(returns) >= 2 else None
     )
 
     daily_risk_free_rate = (
@@ -87,7 +95,7 @@ def calculate_performance_metrics(
     sharpe_ratio = (
         excess_returns.mean() / returns.std(ddof=1)
         * np.sqrt(TRADING_DAYS)
-        if returns.std(ddof=1) > 0
+        if len(returns) >= 2 and returns.std(ddof=1) > 0
         else None
     )
 
@@ -108,7 +116,7 @@ def calculate_performance_metrics(
         "ending_value": float(equity_curve.iloc[-1]),
         "cumulative_return": float(cumulative_return),
         "annualized_return": float(annualized_return),
-        "annualized_volatility": float(annualized_volatility),
+        "annualized_volatility": float(annualized_volatility) if annualized_volatility is not None else None,
         "max_drawdown": max_drawdown,
         "sharpe_ratio": (
             float(sharpe_ratio)
@@ -127,6 +135,7 @@ def compare_portfolio_to_benchmark(
     risk_free_rate: float = 0.0,
     *,
     requested_start_date: str | None = None,
+    minimum_observations: int = 2,
 ) -> dict:
     """
     Compare portfolio and benchmark over identical return dates.
@@ -134,6 +143,8 @@ def compare_portfolio_to_benchmark(
     Compatibility: start_date is the first aligned return ENDING date, not
     the investment baseline. Ending-date-only Series cannot prove a baseline
     or matching intervals. Use compare_interval_returns for those guarantees.
+    minimum_observations=1 opts into growth comparisons only; the default
+    retains legacy minimums and behavior.
     """
 
     portfolio = pd.Series(
@@ -150,7 +161,9 @@ def compare_portfolio_to_benchmark(
         join="inner",
     ).dropna()
 
-    if len(aligned) < 2:
+    if isinstance(minimum_observations, bool) or minimum_observations not in (1, 2):
+        raise ValueError("minimum_observations must be 1 or 2")
+    if len(aligned) < minimum_observations:
         raise ValueError(
             "Insufficient overlapping portfolio and benchmark returns"
         )
@@ -159,12 +172,14 @@ def compare_portfolio_to_benchmark(
         aligned["portfolio"],
         initial_capital,
         risk_free_rate,
+        minimum_observations=minimum_observations,
     )
 
     benchmark_metrics = calculate_performance_metrics(
         aligned["benchmark"],
         initial_capital,
         risk_free_rate,
+        minimum_observations=minimum_observations,
     )
 
     return {

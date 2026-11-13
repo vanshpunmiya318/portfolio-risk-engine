@@ -176,7 +176,9 @@ def get_benchmark_return_observations(
     return _from_boundaries(returns, boundaries, calendar)
 
 
-def _validate(observations, side):
+def _validate(observations, side, minimum_observations=2):
+    if isinstance(minimum_observations, bool) or minimum_observations not in (1, 2):
+        raise ValueError("minimum_observations must be 1 or 2")
     ordered = tuple(sorted(observations, key=lambda item: (item.end_date, item.start_date or date.min)))
     issues = []
     seen = set()
@@ -198,14 +200,15 @@ def _validate(observations, side):
         elif item.trading_sessions != 1:
             issues.append(CoverageIssue("not_one_session", "Daily metrics require exactly one verified trading session per return.", side, *interval))
         previous = item
-    if len(ordered) < 2:
-        issues.append(CoverageIssue("insufficient_observations", "At least two daily return intervals are required.", side))
+    if len(ordered) < minimum_observations:
+        message = "At least two daily return intervals are required." if minimum_observations == 2 else "At least one daily return interval is required."
+        issues.append(CoverageIssue("insufficient_observations", message, side))
     return ordered, issues
 
 
-def _align(portfolio, benchmark):
-    portfolio, p_issues = _validate(portfolio, "portfolio")
-    benchmark, b_issues = _validate(benchmark, "benchmark")
+def _align(portfolio, benchmark, minimum_observations=2):
+    portfolio, p_issues = _validate(portfolio, "portfolio", minimum_observations)
+    benchmark, b_issues = _validate(benchmark, "benchmark", minimum_observations)
     issues = p_issues + b_issues
     p_intervals = {(item.start_date, item.end_date) for item in portfolio}
     b_intervals = {(item.start_date, item.end_date) for item in benchmark}
@@ -248,12 +251,15 @@ def calculate_interval_performance(
     observations: Iterable[ReturnObservation], initial_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
     *, requested_start_date: date | None = None,
+    minimum_observations: int = 2,
 ) -> IntervalResult[dict]:
-    ordered, issues = _validate(observations, "portfolio")
+    """Opt into one observation for growth, retaining strict interval validation."""
+    ordered, issues = _validate(observations, "portfolio", minimum_observations)
     period = _period(ordered, requested_start_date=requested_start_date, verified=not issues)
     if issues:
         return IntervalResult("insufficient_coverage", reasons=tuple(issues), **period)
-    return IntervalResult("ok", calculate_performance_metrics(_series(ordered), initial_capital, risk_free_rate),
+    return IntervalResult("ok", calculate_performance_metrics(_series(ordered), initial_capital, risk_free_rate,
+                          minimum_observations=minimum_observations),
                           observations=len(ordered), **period)
 
 
@@ -261,14 +267,17 @@ def compare_interval_returns(
     portfolio: Iterable[ReturnObservation], benchmark: Iterable[ReturnObservation],
     initial_capital: float = 100_000.0, risk_free_rate: float = 0.0,
     *, requested_start_date: date | None = None,
+    minimum_observations: int = 2,
 ) -> IntervalResult[dict]:
-    portfolio, benchmark, issues = _align(portfolio, benchmark)
+    """Compare exact intervals; one-observation growth comparisons are opt-in."""
+    portfolio, benchmark, issues = _align(portfolio, benchmark, minimum_observations)
     period = _period(portfolio, benchmark, requested_start_date, verified=not issues)
     if issues:
         return IntervalResult("insufficient_coverage", reasons=issues, **period)
     # Financial values are unchanged; this new comparison reports the baseline
     # while the legacy function retains its ending-date start_date convention.
-    value = compare_portfolio_to_benchmark(_series(portfolio), _series(benchmark), initial_capital, risk_free_rate)
+    value = compare_portfolio_to_benchmark(_series(portfolio), _series(benchmark), initial_capital, risk_free_rate,
+                                         minimum_observations=minimum_observations)
     value.update(analysis_period_metadata(
         requested_start_date=period["requested_start_date"], baseline_date=period["baseline_date"],
         first_return_end_date=period["first_return_end_date"], effective_end_date=period["end_date"],
