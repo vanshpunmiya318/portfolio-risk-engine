@@ -11,6 +11,8 @@ from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
 from fastapi.encoders import jsonable_encoder
 
 from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
+from riskengine.api.allocation_models import AllocationResponse
+from riskengine.risk.allocation_service import get_allocation_response
 from riskengine.risk.analysis_service import AnalysisInputError, AnalysisPortfolioNotFound
 from riskengine.risk.performance_service import (
     get_performance_response, validate_performance_request, PerformanceDataConflict,
@@ -211,3 +213,29 @@ def portfolio_risk(
         raise HTTPException(status_code=422, detail=str(error)) from error
     except PerformanceDataConflict as error:
         raise HTTPException(status_code=409, detail=jsonable_encoder([asdict(issue) for issue in error.issues])) from error
+
+
+@app.get("/api/portfolios/{portfolio_id}/allocation", response_model=AllocationResponse)
+def portfolio_allocation(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+    as_of_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+):
+    if as_of_date is not None:
+        try:
+            date.fromisoformat(as_of_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="as_of_date must be a valid YYYY-MM-DD date")
+    db_path = request.app.state.database.path
+    if not db_path.is_file():
+        raise HTTPException(status_code=404, detail="Portfolio database not found")
+    try:
+        with closing(get_connection(db_path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            return get_allocation_response(connection, portfolio_id, as_of_date)
+    except PortfolioNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except HoldingsInputError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except HoldingsDataConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
