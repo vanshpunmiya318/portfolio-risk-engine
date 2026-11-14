@@ -10,10 +10,11 @@ from typing import Annotated
 from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
 from fastapi.encoders import jsonable_encoder
 
-from riskengine.api.analysis_models import PerformanceResponse
+from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
 from riskengine.risk.analysis_service import AnalysisInputError, AnalysisPortfolioNotFound
 from riskengine.risk.performance_service import (
     get_performance_response, validate_performance_request, PerformanceDataConflict,
+    get_risk_response, validate_risk_request,
 )
 from riskengine.api.holdings_models import HoldingsResponse
 from riskengine.risk.holdings_service import (
@@ -176,6 +177,34 @@ def portfolio_performance(
         with closing(get_connection(db_path, read_only=True)) as connection:
             connection.execute("BEGIN")
             return get_performance_response(connection, portfolio_id, start_date, end_date, benchmark)
+    except AnalysisPortfolioNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AnalysisInputError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except PerformanceDataConflict as error:
+        raise HTTPException(status_code=409, detail=jsonable_encoder([asdict(issue) for issue in error.issues])) from error
+
+
+@app.get("/api/portfolios/{portfolio_id}/risk", response_model=RiskResponse)
+def portfolio_risk(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+    start_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    end_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    benchmark: Annotated[str, Query(min_length=1)] = "SPY",
+    confidence: Annotated[float, Query(gt=0, lt=1, allow_inf_nan=False)] = 0.95,
+):
+    try:
+        validate_risk_request(start_date, end_date, benchmark, confidence)
+    except AnalysisInputError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    db_path = request.app.state.database.path
+    if not db_path.is_file():
+        raise HTTPException(status_code=404, detail="Portfolio database not found")
+    try:
+        with closing(get_connection(db_path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            return get_risk_response(connection, portfolio_id, start_date, end_date, benchmark, confidence)
     except AnalysisPortfolioNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except AnalysisInputError as error:

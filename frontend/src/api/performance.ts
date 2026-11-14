@@ -76,9 +76,10 @@ const interval = (v: unknown) => record(v) && nullable(isCalendarDate)(v.start_d
 const chart = (v: unknown) => record(v) && v.unit === 'wealth_index' && array(v.unavailable_reasons, message) &&
   ordered(v.points, p => record(p) && isCalendarDate(p.date) && finite(p.value), 'date');
 
-export function isPerformanceResponse(v: unknown): v is PerformanceResponse {
-  if (!record(v) || !record(v.period) || !record(v.methodology) || !record(v.metric_conventions) ||
-      !record(v.comparison) || !record(v.wealth_index)) return false;
+export type AnalysisResponse = Omit<PerformanceResponse, "portfolio_metrics" | "benchmark_metrics" | "comparison" | "wealth_index">;
+
+export function isAnalysisResponse(v: unknown): boolean {
+  if (!record(v) || !record(v.period) || !record(v.methodology) || !record(v.metric_conventions)) return false;
   return ['ok', 'partial', 'unavailable'].includes(String(v.status)) && count(v.portfolio_id) && v.portfolio_id > 0 &&
     text(v.name) && currency(v.currency) && text(v.benchmark_ticker) && nullable(currency)(v.benchmark_currency) &&
     finite(v.confidence) && v.confidence > 0 && v.confidence < 1 && typeof v.comparison_eligible === 'boolean' &&
@@ -92,7 +93,14 @@ export function isPerformanceResponse(v: unknown): v is PerformanceResponse {
     ordered(v.valuations, p => record(p) && isCalendarDate(p.date) && typeof p.complete === 'boolean' &&
       ['holdings_value', 'cash_balance', 'total_equity', 'net_contributions'].every(k => nullable(finite)(p[k])), 'date') &&
     ordered(v.portfolio_intervals, interval, 'end_date') && ordered(v.benchmark_intervals, interval, 'end_date') &&
-    array(v.warnings, message) && array(v.unavailable_reasons, message) && metrics(v.portfolio_metrics) && metrics(v.benchmark_metrics) &&
+    array(v.warnings, message) && array(v.unavailable_reasons, message);
+}
+
+export const analysisValidation = { metric, message, ordered, finite, record };
+
+export function isPerformanceResponse(v: unknown): v is PerformanceResponse {
+  return isAnalysisResponse(v) && record(v) && record(v.comparison) && record(v.wealth_index) &&
+    metrics(v.portfolio_metrics) && metrics(v.benchmark_metrics) &&
     metric(v.comparison.excess_cumulative_return, 'fraction') && metric(v.comparison.excess_annualized_return, 'fraction') &&
     chart(v.wealth_index.portfolio) && chart(v.wealth_index.benchmark);
 }
@@ -114,7 +122,7 @@ export class PerformanceRequestError extends Error {
     this.details = details;
   }
 }
-function errorDetails(body: unknown): string[] {
+export function errorDetails(body: unknown): string[] {
   if (!record(body)) return [];
   if (text(body.detail)) return [body.detail];
   if (!Array.isArray(body.detail)) return [];

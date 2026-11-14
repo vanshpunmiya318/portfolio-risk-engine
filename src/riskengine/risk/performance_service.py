@@ -1,13 +1,14 @@
-"""Connection-owned orchestration for the read-only Performance response.
+"""Connection-owned orchestration for read-only Performance and Risk responses.
 
 The caller supplies an active snapshot. Date queries only size calendar coverage;
 prepare_analysis retains ownership of reporting/baseline selection. No benchmark
 prices, unrelated instruments or current-clock values establish portfolio bounds.
 """
 from datetime import date
+from math import isfinite
 
-from riskengine.api.analysis_models import PerformanceResponse
-from riskengine.risk.analysis_adapters import build_performance_response
+from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
+from riskengine.risk.analysis_adapters import build_performance_response, build_risk_response
 from riskengine.risk.analysis_models import AnalysisIssue
 from riskengine.risk.analysis_service import (
     AnalysisInputError, AnalysisPortfolioNotFound, prepare_analysis,
@@ -44,6 +45,27 @@ def validate_performance_request(start_date, end_date, benchmark):
 
 def get_performance_response(connection, portfolio_id, start_date=None, end_date=None,
                              benchmark="SPY") -> PerformanceResponse:
+    return build_performance_response(_prepare_response_analysis(
+        connection, portfolio_id, start_date, end_date, benchmark))
+
+
+def validate_risk_request(start_date, end_date, benchmark, confidence):
+    boundaries = validate_performance_request(start_date, end_date, benchmark)
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not isfinite(confidence) or not 0 < confidence < 1:
+        raise AnalysisInputError("confidence must be finite and strictly between 0 and 1")
+    return boundaries
+
+
+def get_risk_response(connection, portfolio_id, start_date=None, end_date=None,
+                      benchmark="SPY", confidence=0.95) -> RiskResponse:
+    validate_risk_request(start_date, end_date, benchmark, confidence)
+    return build_risk_response(_prepare_response_analysis(
+        connection, portfolio_id, start_date, end_date, benchmark, confidence))
+
+
+def _prepare_response_analysis(connection, portfolio_id, start_date, end_date,
+                               benchmark, confidence=0.95):
+    """Shared bounds, calendar and integrity policy for both response adapters."""
     start, end = validate_performance_request(start_date, end_date, benchmark)
     if not connection.in_transaction:
         raise AnalysisInputError("Caller must begin a SQLite read transaction before analysis")
@@ -84,8 +106,8 @@ def get_performance_response(connection, portfolio_id, start_date=None, end_date
             # blanket financial ValueError-to-integrity translations.
             raise AnalysisInputError(f"Unsupported calendar coverage: {error}") from error
     prepared = prepare_analysis(connection, portfolio_id, start_date=start_date, end_date=end_date,
-                                benchmark_ticker=benchmark, session_calendar=calendar)
+                                benchmark_ticker=benchmark, confidence=confidence, session_calendar=calendar)
     conflicts = tuple(issue for issue in prepared.issues if issue.category == "integrity")
     if conflicts:
         raise PerformanceDataConflict(conflicts)
-    return build_performance_response(prepared)
+    return prepared
