@@ -108,20 +108,7 @@ def get_positions(connection, portfolio_id, as_of_date=None):
         query, parameters
     ).fetchall()
 
-    positions = {}
-
-    for (
-        instrument_id,
-        ticker,
-        transaction_date,
-        transaction_type,
-        quantity,
-        transaction_id,
-    ) in transactions:
-        signed_quantity = (
-            quantity if transaction_type == "BUY" else -quantity
-        )
-
+    def multiplier(instrument_id, transaction_date):
         split_query = """
             SELECT COALESCE(
                 EXP(SUM(LN(ratio))),
@@ -139,9 +126,30 @@ def get_positions(connection, portfolio_id, as_of_date=None):
             split_query += " AND ex_date <= ?"
             split_parameters.append(as_of_date)
 
-        split_multiplier = connection.execute(
+        return connection.execute(
             split_query, split_parameters
         ).fetchone()[0]
+
+    return positions_from_records(transactions, multiplier)
+
+
+def positions_from_records(transactions, multiplier):
+    """Shared legacy accumulation order; split factors are supplied by SQLite."""
+    positions = {}
+
+    for (
+        instrument_id,
+        ticker,
+        transaction_date,
+        transaction_type,
+        quantity,
+        transaction_id,
+    ) in transactions:
+        signed_quantity = (
+            quantity if transaction_type == "BUY" else -quantity
+        )
+
+        split_multiplier = multiplier(instrument_id, transaction_date)
 
         positions[ticker] = (
             positions.get(ticker, 0.0)
@@ -203,6 +211,13 @@ def validate_transactions(connection, portfolio_id, as_of_date=None):
         params=[*instrument_ids, as_of_date, as_of_date],
     )
 
+    return validate_transaction_records(transactions, splits)
+
+
+def validate_transaction_records(transactions, splits):
+    """Validate preselected history with the unchanged split-before-trade fold."""
+    if transactions.empty:
+        return True
     events = []
 
     for row in transactions.itertuples(index=False):

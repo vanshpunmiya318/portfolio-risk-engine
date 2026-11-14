@@ -9,15 +9,16 @@ from math import isfinite
 import sqlite3
 
 from riskengine.db.instruments import normalise_ticker
-from riskengine.db.portfolios import get_portfolio_value
+from riskengine.db.portfolios import get_portfolio_value, prepare_positions
 from riskengine.db.prices import get_prices
 from riskengine.db.transactions import (
-    get_cash_balance, get_net_cash_flows, get_positions, validate_transactions,
+    get_cash_balance, get_net_cash_flows, validate_transactions,
 )
 from riskengine.risk.analysis_models import (
     AnalysisCoverage, AnalysisIssue, AnalysisMethodology, AnalysisPeriod,
     AnalysisValuation, PreparedAnalysis,
 )
+from riskengine.risk.valuation_context import PreparedValuationContext
 from riskengine.risk.return_intervals import (
     VerifiedSessionCalendar, get_benchmark_return_observations,
     get_portfolio_return_observations,
@@ -97,13 +98,18 @@ def prepare_analysis(
         "SELECT date FROM cash_flows WHERE portfolio_id = ? ORDER BY date",
         (portfolio_id, portfolio_id),
     ).fetchall()
-    price_dates = connection.execute(
-        "SELECT DISTINCT p.date FROM prices p WHERE p.instrument_id IN "
+    # The existing date-range read also supplies exact-date membership for all
+    # portfolio instruments in this caller-owned snapshot. Keep raw stored
+    # dates/tickers: normalizing them could turn invalid records into prices.
+    price_rows = connection.execute(
+        "SELECT DISTINCT i.ticker, p.date FROM prices p "
+        "LEFT JOIN instruments i ON i.id = p.instrument_id WHERE p.instrument_id IN "
         "(SELECT instrument_id FROM transactions WHERE portfolio_id = ? AND (? IS NULL OR date <= ?)) ORDER BY p.date",
         (portfolio_id, end.isoformat() if end else None, end.isoformat() if end else None),
     ).fetchall()
+    price_presence = {(symbol, day) for symbol, day in price_rows}
     event_dates = [date.fromisoformat(row[0]) for row in events if end is None or row[0] <= end.isoformat()]
-    observed = [date.fromisoformat(row[0]) for row in price_dates if end is None or row[0] <= end.isoformat()]
+    observed = [date.fromisoformat(day) for day in sorted({row[1] for row in price_rows}) if end is None or day <= end.isoformat()]
     lower = start or (min(event_dates) if event_dates else None)
     upper = end or (max(observed + event_dates) if observed or event_dates else None)
     sessions = ()
@@ -134,67 +140,7 @@ def prepare_analysis(
             (portfolio_id, selected_start.isoformat(), selected_end.isoformat()),
         ).fetchall()
         boundaries = sorted(set(boundaries) | {date.fromisoformat(row[0]) for row in flow_dates})
-    cutoff = selected_end
-    integrity_ok = True
-    if cutoff is not None:
-        try:
-            validate_transactions(connection, portfolio_id, cutoff.isoformat())
-        except ValueError as error:
-            if not str(error).startswith("Negative position detected"):
-                raise
-            integrity_ok = False
-            issue("invalid_positions", str(error), category="integrity", b=cutoff)
-
-    def currencies_ok(day):
-        conflicts = connection.execute(
-            "SELECT DISTINCT i.ticker FROM transactions t JOIN instruments i ON i.id=t.instrument_id "
-            "WHERE t.portfolio_id=? AND t.date<=? AND (t.currency!=? OR i.currency!=?)",
-            (portfolio_id, day.isoformat(), currency, currency),
-        ).fetchall()
-        flows = connection.execute(
-            "SELECT 1 FROM cash_flows WHERE portfolio_id=? AND date<=? AND currency!=? LIMIT 1",
-            (portfolio_id, day.isoformat(), currency),
-        ).fetchone()
-        for row in conflicts:
-            issue("currency_conflict", "Transaction/instrument currency differs from portfolio; no FX conversion.", a=day, b=day, instrument=row[0])
-        if flows:
-            issue("currency_conflict", "Cash-flow currency differs from portfolio; no FX conversion.", a=day, b=day)
-        return not conflicts and not flows
-
-    valuations = []
-    for day in boundaries:
-        value = cash = contributions = None
-        valid = integrity_ok and currencies_ok(day)
-        if valid:
-            # Split-aware positions, unlike the legacy raw-quantity coverage query.
-            positions = get_positions(connection, portfolio_id, day.isoformat())
-            active = positions.loc[positions.quantity > 0, "ticker"].tolist()
-            for symbol in active:
-                prices = get_prices(connection, symbol, day.isoformat(), day.isoformat())
-                if prices.empty:
-                    valid = False
-                    issue("missing_price", "Exact-date active-holding price is missing.", a=day, b=day, instrument=symbol)
-            try:
-                cash = _finite(get_cash_balance(connection, portfolio_id, day.isoformat()))
-                contributions = _finite(get_net_cash_flows(connection, portfolio_id, day.isoformat()))
-                if valid:
-                    frame = get_portfolio_value(connection, portfolio_id, day.isoformat(), max_age_days=0)
-                    for item in frame.market_value:
-                        _finite(item)
-                    # Preserve the engine's aggregation order after validating
-                    # every component (pandas sum would otherwise skip NaNs).
-                    value = _finite(frame.market_value.sum())
-                    _finite(value + cash)
-            except ValueError as error:
-                message = str(error)
-                if message.startswith(("Incomplete corporate action coverage", "Invalid coverage date range")):
-                    issue("corporate_action_conflict", message, category="integrity", a=day, b=day)
-                elif message == "Non-finite valuation":
-                    issue("invalid_valuation", message, a=day, b=day)
-                else:
-                    raise
-                valid = False
-        valuations.append(AnalysisValuation(day, value if valid else None, cash, value + cash if valid else None, contributions, valid))
+    valuations = _prepare_valuations(connection, portfolio_id, currency, boundaries, price_presence, issue)
     # Omitted starts may exclude only a valid unfunded prefix, never missing data.
     if start is None:
         skipped = 0
@@ -216,6 +162,7 @@ def prepare_analysis(
         try:
             p_intervals.extend(get_portfolio_return_observations(
                 connection, portfolio_id, [left.date, right.date], max_age_days=0, calendar=session_calendar,
+                prepared_valuations=(left, right),
             ))
         except ValueError as error:
             if str(error) == "Simple returns must be finite and at least -100%":
@@ -286,3 +233,94 @@ def prepare_analysis(
         pc.daily_eligible and bc.daily_eligible and p_keys == b_keys and benchmark_currency == currency,
         tuple(issues), AnalysisMethodology(session_calendar.source if session_calendar else None),
     )
+
+
+def _prepare_valuations(connection, portfolio_id, currency, boundaries, price_presence, issue):
+    if not boundaries:
+        return []
+    # A connection with write history cannot safely identify a rollback of
+    # pre-existing writes. Keep those callers on their original SQL path.
+    if connection.total_changes:
+        return _valuation_rows(connection, portfolio_id, currency, boundaries, price_presence, issue, None)
+    with PreparedValuationContext(connection, portfolio_id, boundaries) as context:
+        return _valuation_rows(connection, portfolio_id, currency, boundaries, price_presence, issue, context)
+
+
+def _valuation_rows(connection, portfolio_id, currency, boundaries, price_presence, issue, context):
+    cutoff = boundaries[-1]
+    integrity_ok = True
+    if cutoff is not None:
+        try:
+            if context is None:
+                validate_transactions(connection, portfolio_id, cutoff.isoformat())
+            else:
+                context.validate(connection, portfolio_id, cutoff.isoformat())
+        except ValueError as error:
+            if not str(error).startswith("Negative position detected"):
+                raise
+            integrity_ok = False
+            issue("invalid_positions", str(error), category="integrity", b=cutoff)
+
+    def currencies_ok(day):
+        conflicts = connection.execute(
+            "SELECT DISTINCT i.ticker FROM transactions t JOIN instruments i ON i.id=t.instrument_id "
+            "WHERE t.portfolio_id=? AND t.date<=? AND (t.currency!=? OR i.currency!=?)",
+            (portfolio_id, day.isoformat(), currency, currency),
+        ).fetchall()
+        flows = connection.execute(
+            "SELECT 1 FROM cash_flows WHERE portfolio_id=? AND date<=? AND currency!=? LIMIT 1",
+            (portfolio_id, day.isoformat(), currency),
+        ).fetchone()
+        for row in conflicts:
+            issue("currency_conflict", "Transaction/instrument currency differs from portfolio; no FX conversion.", a=day, b=day, instrument=row[0])
+        if flows:
+            issue("currency_conflict", "Cash-flow currency differs from portfolio; no FX conversion.", a=day, b=day)
+        return not conflicts and not flows
+
+    valuations = []
+    for day in boundaries:
+        value = cash = contributions = None
+        valid = integrity_ok and currencies_ok(day)
+        if valid:
+            # Split-aware positions, unlike the legacy raw-quantity coverage query.
+            if context is None:
+                prepared_positions = prepare_positions(connection, portfolio_id, day.isoformat())
+                positions = prepared_positions.to_frame()
+            else:
+                positions = context.positions(connection, portfolio_id, day.isoformat())
+            active = positions.loc[positions.quantity > 0, "ticker"].tolist()
+            for symbol in active:
+                if (normalise_ticker(symbol), day.isoformat()) not in price_presence:
+                    valid = False
+                    issue("missing_price", "Exact-date active-holding price is missing.", a=day, b=day, instrument=symbol)
+            try:
+                if context is None:
+                    cash = _finite(get_cash_balance(connection, portfolio_id, day.isoformat()))
+                    contributions = _finite(get_net_cash_flows(connection, portfolio_id, day.isoformat()))
+                else:
+                    raw_contributions, raw_cash = context.cash(connection, portfolio_id, day.isoformat())
+                    cash = _finite(raw_cash)
+                    contributions = _finite(raw_contributions)
+                if valid:
+                    if context is None:
+                        frame = get_portfolio_value(connection, portfolio_id, day.isoformat(), max_age_days=0,
+                                                    prepared_positions=prepared_positions)
+                    else:
+                        frame = context.value(connection, portfolio_id, day.isoformat())
+                    for item in frame.market_value:
+                        _finite(item)
+                    # Preserve the engine's aggregation order after validating
+                    # every component (pandas sum would otherwise skip NaNs).
+                    value = _finite(frame.market_value.sum())
+                    _finite(value + cash)
+            except ValueError as error:
+                message = str(error)
+                if message.startswith(("Incomplete corporate action coverage", "Invalid coverage date range")):
+                    issue("corporate_action_conflict", message, category="integrity", a=day, b=day)
+                elif message == "Non-finite valuation":
+                    issue("invalid_valuation", message, a=day, b=day)
+                else:
+                    raise
+                valid = False
+        valuations.append(AnalysisValuation(day, value if valid else None, cash, value + cash if valid else None, contributions, valid))
+    return valuations

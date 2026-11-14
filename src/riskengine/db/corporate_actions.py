@@ -26,6 +26,13 @@ def validate_corporate_action_coverage(
         (instrument_id, start_date, end_date),
     ).fetchall()
 
+    return validate_coverage_intervals(start, end, rows)
+
+
+def validate_coverage_intervals(start, end, rows):
+    """Shared inclusive interval validation for SQL and preloaded records."""
+    if start > end:
+        raise ValueError("Invalid coverage date range")
     covered_until = start - timedelta(days=1)
 
     for row_start, row_end in rows:

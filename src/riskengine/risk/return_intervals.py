@@ -10,7 +10,7 @@ from bisect import bisect_left
 from dataclasses import dataclass, field
 from datetime import date
 from math import isfinite
-from typing import Generic, Iterable, Literal, Sequence, TypeVar
+from typing import TYPE_CHECKING, Generic, Iterable, Literal, Sequence, TypeVar
 
 import pandas as pd
 
@@ -23,6 +23,9 @@ from riskengine.risk.performance import (
     analysis_period_metadata,
 )
 from riskengine.risk.portfolio_returns import get_portfolio_daily_returns
+
+if TYPE_CHECKING:
+    from riskengine.risk.analysis_models import AnalysisValuation
 
 
 def _date(value) -> date:
@@ -149,16 +152,47 @@ def _from_boundaries(returns, boundaries, calendar):
     return observations_from_series(returns, start_dates=list(dates[:-1]), calendar=calendar)
 
 
+def _prepared_equities(connection, boundaries, valuations: Sequence["AnalysisValuation"]) -> dict[str, float]:
+    if not connection.in_transaction:
+        raise ValueError("Prepared valuations require an active caller-owned transaction")
+    required = {stamp.date() for stamp in boundaries}
+    equities = {}
+    for valuation in valuations:
+        day = _date(valuation.date)
+        if day not in required:
+            continue  # Future/out-of-window records cannot affect this report.
+        key = day.isoformat()
+        if key in equities:
+            raise ValueError(f"Duplicate prepared valuation on {key}")
+        try:
+            value = valuation.total_equity
+            if not valuation.complete or value is None or isinstance(value, bool) or not isfinite(value):
+                raise ValueError
+            equities[key] = float(value)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(f"Prepared valuation must be complete and finite on {key}") from error
+    if set(equities) != {day.isoformat() for day in required}:
+        raise ValueError("Prepared valuations must include every requested boundary")
+    return equities
+
+
 def get_portfolio_return_observations(
     connection, portfolio_id: int, dates, max_age_days: int = 0,
     *, calendar: VerifiedSessionCalendar | None = None,
+    prepared_valuations: Sequence["AnalysisValuation"] | None = None,
 ) -> tuple[ReturnObservation, ...]:
     """Reuse cash-flow-aware calculations and retain their actual boundaries.
 
     Caller owns the connection and consistent read snapshot.
+    Optional complete valuations must have been validated for this portfolio and
+    price policy in that same snapshot. They do not replace cash-flow/coverage
+    checks, change boundaries or enable a fallback for incomplete values.
     """
     boundaries = pd.DatetimeIndex(pd.to_datetime(dates)).sort_values()
-    returns = get_portfolio_daily_returns(connection, portfolio_id, boundaries, max_age_days)
+    options = {}
+    if prepared_valuations is not None:
+        options["prepared_equities"] = _prepared_equities(connection, boundaries, prepared_valuations)
+    returns = get_portfolio_daily_returns(connection, portfolio_id, boundaries, max_age_days, **options)
     return _from_boundaries(returns, boundaries, calendar)
 
 

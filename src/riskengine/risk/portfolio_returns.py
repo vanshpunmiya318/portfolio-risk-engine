@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import pandas as pd
 
 from riskengine.db.portfolios import get_portfolio_subperiod_return
@@ -8,6 +10,8 @@ def get_portfolio_daily_returns(
     portfolio_id: int,
     dates,
     max_age_days: int = 0,
+    *,
+    prepared_equities: Mapping[str, float] | None = None,
 ) -> pd.Series:
     """
     Calculate cash-flow-aware portfolio returns between valuation dates.
@@ -17,6 +21,8 @@ def get_portfolio_daily_returns(
     deposits and withdrawals.
 
     Returns are indexed by the ending valuation date.
+    Optional prepared equities come from the same portfolio and active snapshot;
+    they only avoid equity reloading inside the existing subperiod calculation.
     """
 
     if max_age_days < 0:
@@ -47,6 +53,7 @@ def get_portfolio_daily_returns(
             previous_date.strftime("%Y-%m-%d"),
             current_date.strftime("%Y-%m-%d"),
             max_age_days=max_age_days,
+            **({"prepared_equities": prepared_equities} if prepared_equities is not None else {}),
         )
 
         returns.append(float(daily_return))

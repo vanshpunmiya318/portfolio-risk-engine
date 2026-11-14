@@ -1,3 +1,8 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from math import isfinite
+import sqlite3
+
 from riskengine.db.corporate_actions import (
     validate_corporate_action_coverage,
 )
@@ -17,6 +22,40 @@ from riskengine.db.transactions import (
 from riskengine.db.prices import get_price_with_max_age
 
 from riskengine.db.prices import get_portfolio_price_coverage
+
+
+@dataclass(frozen=True)
+class PreparedPositions:
+    """Positions bound to one caller-owned read snapshot and inclusive cutoff.
+
+    Obtain through prepare_positions(), not from an arbitrary holdings frame.
+    The caller must retain the same transaction until valuation completes.
+    Connections with any write history conservatively reload positions: SQLite's
+    total_changes does not reveal rollback of writes made before preparation.
+    """
+
+    connection: sqlite3.Connection
+    portfolio_id: int
+    as_of_date: str | None
+    total_changes: int
+    data_version: int
+    rows: tuple[tuple[str, float], ...]
+
+    def to_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(self.rows, columns=["ticker", "quantity"])
+
+
+def prepare_positions(connection, portfolio_id, as_of_date):
+    """Load unchanged split-aware positions for immediate snapshot-local reuse."""
+    if not connection.in_transaction:
+        raise ValueError("Prepared positions require an active caller-owned read transaction")
+    version = connection.execute("PRAGMA data_version").fetchone()[0]
+    positions = get_positions(connection, portfolio_id, as_of_date)
+    return PreparedPositions(
+        connection, portfolio_id, as_of_date, connection.total_changes, version,
+        tuple(positions.itertuples(index=False, name=None)),
+    )
+
 
 def normalise_portfolio_name(name):
     return name.strip()
@@ -84,6 +123,7 @@ def get_portfolio_value(
     max_age_days=None,
     *,
     allow_missing_prices=False,
+    prepared_positions: PreparedPositions | None = None,
 ):
     """
     Value active portfolio holdings using the latest available prices.
@@ -96,6 +136,10 @@ def get_portfolio_value(
 
     When max_age_days is specified, reject prices older than
     the permitted number of calendar days.
+
+    prepared_positions must come from prepare_positions() for this exact
+    portfolio/date in the same uninterrupted caller-owned read transaction.
+    Only position loading is skipped; transaction and price validation remain.
     """
     if max_age_days is not None:
         if (
@@ -117,12 +161,63 @@ def get_portfolio_value(
         as_of_date,
     )
 
-    positions = get_positions(
+    if prepared_positions is None:
+        positions = get_positions(connection, portfolio_id, as_of_date)
+    else:
+        if (
+            not isinstance(prepared_positions, PreparedPositions)
+            or prepared_positions.connection is not connection
+            or prepared_positions.portfolio_id != portfolio_id
+            or prepared_positions.as_of_date != as_of_date
+            or not connection.in_transaction
+            or prepared_positions.total_changes != connection.total_changes
+            or prepared_positions.data_version != connection.execute("PRAGMA data_version").fetchone()[0]
+        ):
+            raise ValueError("Prepared positions do not match the portfolio, cutoff or read snapshot")
+        positions = (
+            prepared_positions.to_frame() if prepared_positions.total_changes == 0
+            else get_positions(connection, portfolio_id, as_of_date)
+        )
+
+    return value_positions(
+        positions, as_of_date, max_age_days, allow_missing_prices,
+        lambda tickers, day: get_latest_prices(connection, tickers, day),
+        lambda ticker, day: _validate_holding_coverage(connection, portfolio_id, ticker, day),
+    )
+
+
+def _validate_holding_coverage(connection, portfolio_id, ticker, as_of_date):
+    instrument = connection.execute(
+        "SELECT id FROM instruments WHERE ticker = ?",
+        (ticker,),
+    ).fetchone()
+
+    first_trade = connection.execute(
+        """
+        SELECT MIN(date)
+        FROM transactions
+        WHERE portfolio_id = ?
+          AND instrument_id = ?
+          AND date <= ?
+        """,
+        (portfolio_id, instrument[0], as_of_date),
+    ).fetchone()[0]
+
+    validate_corporate_action_coverage(
         connection,
-        portfolio_id,
+        instrument[0],
+        first_trade,
         as_of_date,
     )
 
+
+def value_positions(positions, as_of_date, max_age_days, allow_missing_prices,
+                    load_prices, validate_coverage):
+    """Shared valuation kernel; callers retain selection and validation ownership.
+
+    Keep row order, missing/stale checks, price sources and pandas aggregation
+    identical for both legacy SQL readers and request-local historical readers.
+    """
     positions = positions[
         positions["quantity"] > 0
     ].copy()
@@ -138,11 +233,7 @@ def get_portfolio_value(
             ]
         )
 
-    prices = get_latest_prices(
-        connection,
-        positions["ticker"].tolist(),
-        as_of_date,
-    )
+    prices = load_prices(positions["ticker"].tolist(), as_of_date)
 
     missing_tickers = set(
         positions["ticker"]
@@ -191,28 +282,7 @@ def get_portfolio_value(
         if row.source != "tiingo":
             continue
 
-        instrument = connection.execute(
-            "SELECT id FROM instruments WHERE ticker = ?",
-            (row.ticker,),
-        ).fetchone()
-
-        first_trade = connection.execute(
-            """
-            SELECT MIN(date)
-            FROM transactions
-            WHERE portfolio_id = ?
-              AND instrument_id = ?
-              AND date <= ?
-            """,
-            (portfolio_id, instrument[0], as_of_date),
-        ).fetchone()[0]
-
-        validate_corporate_action_coverage(
-            connection,
-            instrument[0],
-            first_trade,
-            as_of_date,
-        )
+        validate_coverage(row.ticker, as_of_date)
 
     result["valuation_price"] = result["adjusted_close"]
 
@@ -410,11 +480,22 @@ def get_portfolio_subperiod_return(
     previous_date,
     current_date,
     max_age_days=0,
+    *,
+    prepared_equities: Mapping[str, float] | None = None,
 ):
+    """Use existing flow timing/formula, optionally reusing validated equity.
+
+    Prepared inputs must belong to this portfolio, price policy and active
+    caller-owned snapshot. Coverage and intermediate-flow checks still run.
+    Omitting them retains the legacy database valuation path.
+    """
     if current_date <= previous_date:
         raise ValueError(
             "Current date must be after previous date"
         )
+
+    if prepared_equities is not None and not connection.in_transaction:
+        raise ValueError("Prepared equities require an active caller-owned transaction")
 
     cash_flow_dates = get_cash_flow_dates(
         connection,
@@ -448,19 +529,24 @@ def get_portfolio_subperiod_return(
                 f"{coverage['missing_instrument_ids']}"
             )
 
-    previous_equity = get_total_portfolio_equity(
-        connection,
-        portfolio_id,
-        previous_date,
-        max_age_days=max_age_days,
-    )
-
-    current_equity = get_total_portfolio_equity(
-        connection,
-        portfolio_id,
-        current_date,
-        max_age_days=max_age_days,
-    )
+    if prepared_equities is None:
+        previous_equity = get_total_portfolio_equity(
+            connection, portfolio_id, previous_date, max_age_days=max_age_days,
+        )
+        current_equity = get_total_portfolio_equity(
+            connection, portfolio_id, current_date, max_age_days=max_age_days,
+        )
+    else:
+        equities = []
+        for valuation_date in (previous_date, current_date):
+            try:
+                value = prepared_equities[valuation_date]
+                if isinstance(value, bool) or not isfinite(value):
+                    raise ValueError
+                equities.append(float(value))
+            except (KeyError, TypeError, ValueError, OverflowError) as error:
+                raise ValueError(f"Prepared equity must be complete and finite on {valuation_date}") from error
+        previous_equity, current_equity = equities
 
     external_flow = get_cash_flow_on_date(
         connection,
