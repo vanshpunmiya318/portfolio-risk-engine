@@ -305,13 +305,12 @@ def _valuation_rows(connection, portfolio_id, currency, boundaries, price_presen
                     if context is None:
                         frame = get_portfolio_value(connection, portfolio_id, day.isoformat(), max_age_days=0,
                                                     prepared_positions=prepared_positions)
+                        for item in frame.market_value:
+                            _finite(item)
+                        # Keep the legacy pandas reduction after component checks.
+                        value = _finite(frame.market_value.sum())
                     else:
-                        frame = context.value(connection, portfolio_id, day.isoformat())
-                    for item in frame.market_value:
-                        _finite(item)
-                    # Preserve the engine's aggregation order after validating
-                    # every component (pandas sum would otherwise skip NaNs).
-                    value = _finite(frame.market_value.sum())
+                        value = _finite(context.holdings_total(connection, portfolio_id, day.isoformat()))
                     _finite(value + cash)
             except ValueError as error:
                 message = str(error)

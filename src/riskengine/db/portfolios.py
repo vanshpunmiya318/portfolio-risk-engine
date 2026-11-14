@@ -254,6 +254,15 @@ def value_positions(positions, as_of_date, max_age_days, allow_missing_prices,
         how="left",
     )
 
+    return value_joined_positions(result, as_of_date, max_age_days, validate_coverage)
+
+
+def value_joined_positions(result, as_of_date, max_age_days, validate_coverage):
+    """Value an owned, ordered join using the unchanged post-join operations.
+
+    The caller must retain the legacy columns/dtypes/row order and perform
+    transaction, position and missing-price checks before using this kernel.
+    """
     if max_age_days is not None:
         from datetime import date
 
