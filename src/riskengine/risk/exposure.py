@@ -26,6 +26,16 @@ def get_portfolio_exposure(
         as_of_date,
         max_age_days=max_age_days,
     )
+    return _exposure_from_valued_holdings(connection, portfolio_id, as_of_date, holdings)
+
+
+def _exposure_from_valued_holdings(connection, portfolio_id, as_of_date, holdings):
+    """Aggregate already-validated ticker/quantity/market_value rows.
+
+    Internal composition boundary: callers own exact-date pricing, position,
+    currency and corporate-action validation in the same read transaction.
+    The ordinary Exposure entry point retains its original valuation path.
+    """
 
     if holdings.empty:
         return {

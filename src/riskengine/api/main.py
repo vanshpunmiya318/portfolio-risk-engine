@@ -5,13 +5,17 @@ from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, asdict
 from datetime import date
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
 from fastapi.encoders import jsonable_encoder
+from fastapi.responses import Response
 
 from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
 from riskengine.api.allocation_models import AllocationResponse
+from riskengine.api.report_models import ReportResponse
+from riskengine.risk.report_service import get_report_response
+from riskengine.risk.report_exports import report_json, report_markdown, report_filename
 from riskengine.risk.allocation_service import get_allocation_response
 from riskengine.risk.analysis_service import AnalysisInputError, AnalysisPortfolioNotFound
 from riskengine.risk.performance_service import (
@@ -68,6 +72,56 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/api/portfolios/{portfolio_id}/report", response_model=ReportResponse)
+def portfolio_report(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+    start_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    end_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    benchmark: Annotated[str, Query(min_length=1)] = "SPY",
+    confidence: Annotated[float, Query(gt=0, lt=1, allow_inf_nan=False)] = 0.95,
+):
+    return _compose_report(request, portfolio_id, start_date, end_date, benchmark, confidence)
+
+
+@app.get("/api/portfolios/{portfolio_id}/report/export")
+def export_portfolio_report(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+    format: Annotated[Literal["json", "markdown"], Query()],
+    start_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    end_date: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    benchmark: Annotated[str, Query(min_length=1)] = "SPY",
+    confidence: Annotated[float, Query(gt=0, lt=1, allow_inf_nan=False)] = 0.95,
+):
+    report = _compose_report(request, portfolio_id, start_date, end_date, benchmark, confidence)
+    content = report_json(report) if format == "json" else report_markdown(report)
+    return Response(content=content,
+                    media_type="application/json" if format == "json" else "text/markdown",
+                    headers={"Content-Disposition": f'attachment; filename="{report_filename(report, format)}"',
+                             "Cache-Control": "no-store"})
+
+
+def _compose_report(request, portfolio_id, start_date, end_date, benchmark, confidence):
+    """Shared validation/error mapping and single snapshot, without internal HTTP."""
+    try:
+        validate_risk_request(start_date, end_date, benchmark, confidence)
+        db_path = request.app.state.database.path
+        if not db_path.is_file():
+            raise HTTPException(status_code=404, detail="Portfolio database not found")
+        with closing(get_connection(db_path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            return get_report_response(connection, portfolio_id, start_date, end_date, benchmark, confidence)
+    except (AnalysisPortfolioNotFound, PortfolioNotFound) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (AnalysisInputError, HoldingsInputError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except PerformanceDataConflict as error:
+        raise HTTPException(status_code=409, detail=jsonable_encoder([asdict(issue) for issue in error.issues])) from error
+    except HoldingsDataConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/health")

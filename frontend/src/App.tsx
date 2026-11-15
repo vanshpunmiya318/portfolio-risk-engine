@@ -5,6 +5,7 @@ import { Holdings } from './pages/Holdings';
 import { Performance } from './pages/Performance';
 import { RiskAnalytics } from './pages/RiskAnalytics';
 import { PortfolioAllocation } from './pages/PortfolioAllocation';
+import { Reports } from './pages/Reports';
 
 const pages = [
   { path: '/overview', title: 'Overview' },
@@ -53,7 +54,8 @@ export function App() {
             <Route path="/performance" element={<Performance portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
             <Route path="/risk-analytics" element={<RiskAnalytics portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
             <Route path="/portfolio-allocation" element={<PortfolioAllocation portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            {pages.slice(2).filter((page) => !['/performance', '/risk-analytics', '/portfolio-allocation'].includes(page.path)).map((page) => (
+            <Route path="/reports" element={<Reports portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
+            {pages.slice(2).filter((page) => !['/performance', '/risk-analytics', '/portfolio-allocation', '/reports'].includes(page.path)).map((page) => (
               <Route key={page.path} path={page.path} element={
                 <section className="page-intro"><p className="eyebrow">Workspace / Coming next</p>
                   <h1>{page.title}</h1><p className="lede">This page is reserved for the next stage of migration.</p>

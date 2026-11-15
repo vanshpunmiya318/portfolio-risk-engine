@@ -4,7 +4,7 @@ import pandas as pd
 
 from riskengine.api.allocation_models import AllocationResponse
 from riskengine.risk.holdings_service import get_holdings_summary, HoldingsDataConflict, HoldingsInputError
-from riskengine.risk.exposure import get_portfolio_exposure
+from riskengine.risk.exposure import get_portfolio_exposure, _exposure_from_valued_holdings
 from riskengine.risk.metrics import portfolio_hhi
 from riskengine.db.transactions import get_cash_balance
 
@@ -13,8 +13,9 @@ def _issue(code, message, scope, ticker=None):
     return dict(code=code, message=message, scope=scope, ticker=ticker)
 
 
-def _snapshot(connection, portfolio_id, day, scope, warnings):
-    holdings = get_holdings_summary(connection, portfolio_id, day, 0)
+def _snapshot(connection, portfolio_id, day, scope, warnings, holdings_loader=None):
+    load_holdings = holdings_loader or get_holdings_summary
+    holdings = load_holdings(connection, portfolio_id, day, 0)
     cutoff = holdings["effective_valuation_date"]
     warnings.extend(_issue(w["code"], w["message"], scope, w.get("ticker")) for w in holdings["warnings"])
     reasons = []
@@ -42,7 +43,13 @@ def _snapshot(connection, portfolio_id, day, scope, warnings):
         reasons.append(_issue("nonpositive_invested_value", "Exposure requires positive market values for every active invested holding.", scope))
     exposure = None
     if complete and rows:
-        exposure = get_portfolio_exposure(connection, portfolio_id, cutoff, max_age_days=0)
+        if holdings_loader is None:
+            exposure = get_portfolio_exposure(connection, portfolio_id, cutoff, max_age_days=0)
+        else:
+            # Only complete, currency-checked, exact-date positive holdings reach
+            # this branch. Preserve row order and the existing pandas reduction.
+            frame = pd.DataFrame.from_records(rows, columns=["ticker", "quantity", "market_value"])
+            exposure = _exposure_from_valued_holdings(connection, portfolio_id, cutoff, frame)
     value = exposure["total_invested_value"] if exposure else 0.0 if complete else None
     weights = {r["ticker"]: r["weight"] for r in exposure["security_exposures"]} if exposure else {}
     concentration = dict(hhi=None, effective_holdings=None, largest_position_weight=None)
@@ -71,12 +78,17 @@ def _snapshot(connection, portfolio_id, day, scope, warnings):
                 concentration=concentration, unavailable_reasons=reasons)
 
 
-def get_allocation_response(connection, portfolio_id, as_of_date=None):
-    """Require a caller-owned read snapshot; never advance an invalid reference."""
+def get_allocation_response(connection, portfolio_id, as_of_date=None, *, _holdings_loader=None):
+    """Require a caller-owned read snapshot; never advance an invalid reference.
+
+    _holdings_loader is internal to Reports: it must supply the unchanged
+    get_holdings_summary result for the supplied connection/portfolio/date/age.
+    Without it, standalone Holdings and Exposure loading remain unchanged.
+    """
     if not connection.in_transaction:
         raise HoldingsInputError("Caller must begin a SQLite read transaction")
     warnings = []
-    current = _snapshot(connection, portfolio_id, as_of_date, "current", warnings)
+    current = _snapshot(connection, portfolio_id, as_of_date, "current", warnings, _holdings_loader)
     portfolio = connection.execute("SELECT name,currency FROM portfolios WHERE id=?", (portfolio_id,)).fetchone()
     cutoff = current["valuation_date"]
     reference_date = connection.execute(
@@ -89,7 +101,7 @@ def get_allocation_response(connection, portfolio_id, as_of_date=None):
         reference_reasons.append(_issue("no_initial_investment", "No recorded initial buy exists on or before this cutoff.", "reference"))
     else:
         try:
-            reference = _snapshot(connection, portfolio_id, reference_date, "reference", warnings)
+            reference = _snapshot(connection, portfolio_id, reference_date, "reference", warnings, _holdings_loader)
             reference_reasons.extend(reference["unavailable_reasons"])
         except (HoldingsDataConflict, HoldingsInputError) as error:
             reference_reasons.append(_issue("invalid_reference", str(error), "reference"))
