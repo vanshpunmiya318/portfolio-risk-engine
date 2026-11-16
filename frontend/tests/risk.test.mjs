@@ -167,7 +167,7 @@ test('one interval and a single supplied baseline do not depend on the legacy da
 });
 test('drawdown chart percentages, maximum-versus-selected labels and accessibility are explicit', () => {
   const html = renderToStaticMarkup(createElement(page.RiskContent, { data: chartFixture() }));
-  for (const text of ['6.25%', '10.00%', 'fraction 0.0625', '7 January 2026', 'drawdown at the selected date', 'Maximum drawdown above is the largest loss', 'Zero represents a previous peak', 'type="range"', 'Home/End', 'role="img"', 'aria-live="polite"', 'scope="col"', 'scope="row"', 'series-0', 'series-1']) assert.ok(html.includes(text), text);
+  for (const text of ['6.25%', '10.00%', '<td>0.0625</td>', 'drawdown values there are decimal fractions', '7 January 2026', 'drawdown at the selected date', 'Maximum drawdown above is the largest loss', 'Zero represents a previous peak', 'type="range"', 'Home/End', 'role="img"', 'aria-live="polite"', 'scope="col"', 'scope="row"', 'series-0', 'series-1']) assert.ok(html.includes(text), text);
   assert.equal((html.match(/class="series-line"/g) ?? []).length, 2);
   assert.ok(html.includes('0.125'), 'Exact data table retains supplied values');
 });
@@ -199,4 +199,14 @@ with closing(sqlite3.connect(Path('../data/historical_portfolio.db').resolve().a
     assert.equal(lines[i].points.length, 716); assert.equal(lines[i].points[0].date, '2024-01-02');
     assert.deepEqual(lines[i].points, data.drawdown[side].points); assert.deepEqual(lines[i].unavailable, []);
   }
+});
+
+
+test('plain-language metric explanations retain confidence, horizon, benchmark and risk-free context', () => {
+  const d = fixture(); d.confidence = .99; d.metric_conventions.risk_free_rate = .025;
+  d.portfolio_metrics.historical_var = metric(-.0125); d.portfolio_metrics.beta = metric(null, 'ratio');
+  const before = structuredClone(d);
+  const html = renderToStaticMarkup(createElement(page.RiskContent, { data: d }));
+  for (const text of ['How widely historical session returns varied', 'This is not a forecast', 'Historical sensitivity to SPY', 'not the same return', 'one-session loss at 99.00% confidence', 'Losses can exceed this estimate', 'fractional tail weights', 'horizon is one trading session', '2.50% annual risk-free rate', 'A ratio, not a percentage', 'Largest historical fall from a running peak', 'including the baseline', '-1.25%', 'Unavailable']) assert.ok(html.includes(text), text);
+  assert.deepEqual(d, before);
 });

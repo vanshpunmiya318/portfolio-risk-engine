@@ -58,6 +58,14 @@ export function RiskContent({ data }: { data: RiskResponse }) {
   const notes = [...data.warnings, ...data.unavailable_reasons];
   const informationalOnly = notes.length > 0 && notes.every(note => note.code === 'not_applicable');
   const primary: [keyof RiskMetrics, string][] = [['annualized_volatility', 'Annualized volatility'], ['beta', `Beta versus ${data.benchmark_ticker}`], ['historical_var', 'One-session historical VaR'], ['historical_cvar', 'One-session historical CVaR']];
+  const explanations: Record<keyof RiskMetrics, string> = {
+    annualized_volatility: `How widely historical session returns varied, scaled to a year using ${data.metric_conventions.annualization_sessions} sessions. This is not a forecast.`,
+    beta: `Historical sensitivity to ${data.benchmark_ticker} returns over matched intervals. A beta of 1 indicates similar sensitivity, not the same return.`,
+    historical_var: `A percentile-based estimate of one-session loss at ${formatWeight(data.confidence)} confidence, from observed returns. Losses can exceed this estimate.`,
+    historical_cvar: `Average loss in the worst historical tail at ${formatWeight(data.confidence)} confidence, using fractional tail weights. The horizon is one trading session.`,
+    sharpe_ratio: `Historical return relative to variability, using a ${formatWeight(data.metric_conventions.risk_free_rate)} annual risk-free rate. A ratio, not a percentage.`,
+    maximum_drawdown: 'Largest historical fall from a running peak within this reporting period, including the baseline. Displayed as a positive loss magnitude.',
+  };
   const differs = (p.requested_start_date !== null && p.requested_start_date !== p.effective_baseline_date) || (p.requested_end_date !== null && p.requested_end_date !== p.effective_end_date);
   return <>
     <div className="summary-heading"><div><p className="eyebrow">Historical risk</p><h2>{data.name}</h2></div><div className="valuation-date"><span>Effective reporting period</span><strong>{date(p.effective_baseline_date)} – {date(p.effective_end_date)}</strong></div></div>
@@ -70,10 +78,10 @@ export function RiskContent({ data }: { data: RiskResponse }) {
     {data.status !== 'ok' && <div className="quality-banner" role="status"><strong>{data.status === 'partial' ? 'Partial risk analysis' : 'Risk estimates unavailable'}</strong><p>Valid portfolio metrics remain visible when benchmark coverage is unavailable. Unavailable values are not zero.</p></div>}
     {data.valuations.length === 0 && data.portfolio_intervals.length === 0 && <div className="summary-state" role="status"><h2>No risk observations</h2><p>No portfolio valuations or adjusted returns were reported for this selection.</p></div>}
     <dl className="summary-metrics performance-metrics">{primary.map(([key, title]) => <div className="summary-metric" key={key}><dt>{title}</dt><dd><Metric value={data.portfolio_metrics[key]} /></dd>
-      {key !== 'beta' && <dd className="metric-note">{data.benchmark_ticker}: <Metric value={data.benchmark_metrics[key]} /></dd>}</div>)}</dl>
+      {key !== 'beta' && <dd className="metric-note">{data.benchmark_ticker}: <Metric value={data.benchmark_metrics[key]} /></dd>}<dd className="risk-explanation">{explanations[key]}</dd></div>)}</dl>
     <p className="valuation-note">VaR and CVaR are one-session historical estimates at {formatWeight(data.confidence)} confidence, not guaranteed loss limits. Negative estimates are preserved; they are not clamped to zero.</p>
     <section className="holdings-panel" aria-labelledby="risk-secondary"><h2 id="risk-secondary">Risk in context</h2><dl className="performance-comparison">
-      {(['sharpe_ratio', 'maximum_drawdown'] as const).map(key => <div key={key}><dt>{key === 'sharpe_ratio' ? 'Sharpe ratio' : 'Maximum drawdown · positive loss magnitude'}</dt><dd>Portfolio: <Metric value={data.portfolio_metrics[key]} /></dd><dd>{data.benchmark_ticker}: <Metric value={data.benchmark_metrics[key]} /></dd></div>)}
+      {(['sharpe_ratio', 'maximum_drawdown'] as const).map(key => <div key={key}><dt>{key === 'sharpe_ratio' ? 'Sharpe ratio' : 'Maximum drawdown · positive loss magnitude'}</dt><dd>Portfolio: <Metric value={data.portfolio_metrics[key]} /></dd><dd>{data.benchmark_ticker}: <Metric value={data.benchmark_metrics[key]} /></dd><dd className="risk-explanation">{explanations[key]}</dd></div>)}
     </dl><p className="panel-caption">Beta and Sharpe are ratios. Benchmark self-beta is not applicable. {data.comparison_eligible ? 'Comparison intervals match.' : 'Benchmark comparison is unavailable; see metric-specific reasons.'}</p></section>
     <TimeSeriesChart key={`${p.effective_baseline_date}/${p.effective_end_date}`} title="Historical drawdown"
       description="Backend-supplied drawdown at the selected date. Zero represents a previous peak; larger percentages represent deeper losses. Maximum drawdown above is the largest loss across the entire reporting period."

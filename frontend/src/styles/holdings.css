@@ -55,3 +55,6 @@
   .holdings-table-panel { padding: var(--space-4); }
 }
 @media (max-width: 420px) { .allocation-legend { grid-template-columns: minmax(0, 1fr); } }
+
+.quantity-details summary { cursor: pointer; }
+.quantity-details .cell-note { white-space: normal; overflow-wrap: anywhere; }

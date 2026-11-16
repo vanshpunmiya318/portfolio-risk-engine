@@ -221,3 +221,49 @@ test('Blob download revokes object URLs and removes temporary anchors', async ()
     assert.deepEqual(actions, ['append', 'click', 'remove', 'blob:test']);
   } finally { globalThis.document = originalDocument; URL.createObjectURL = create; URL.revokeObjectURL = revoke; }
 });
+
+
+test('report groups financial results before detail sections with accessible targets and complete observation counts', () => {
+  const d = clone(); const before = structuredClone(d);
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  assert.ok(html.includes('aria-label="Report sections"'));
+  for (const id of ['financial', 'returns', 'holdings', 'allocation', 'coverage', 'methodology']) {
+    assert.ok(html.includes(`href="#report-${id}"`)); assert.ok(html.includes(`id="report-${id}"`));
+  }
+  assert.ok(html.indexOf('id="report-financial"') < html.indexOf('id="report-returns"'));
+  assert.ok(html.indexOf('id="report-returns"') < html.indexOf('id="report-holdings"'));
+  assert.ok(html.includes('Observation counts by metric'));
+  for (const section of ['performance', 'risk']) for (const value of Object.values(d[section].portfolio_metrics)) assert.ok(html.includes(`Portfolio: ${value.observations} observations`));
+  assert.deepEqual(d, before);
+  const shell = renderToStaticMarkup(createElement(page.Reports));
+  assert.ok(shell.indexOf('aria-label="Report preview"') < shell.indexOf('id="report-downloads"'));
+});
+
+test('report opens date details for shifted sessions, baseline or exact cutoff and leaves aligned dates collapsed', () => {
+  const d = clone();
+  const details = data => renderToStaticMarkup(createElement(page.ReportContent, { data })).match(/<details class="performance-period report-date-details"[^>]*>/)[0];
+  Object.assign(d.period, { requested_start_date: '2026-10-23', selected_start_date: '2026-10-23', effective_baseline_date: '2026-10-23', requested_end_date: '2026-11-06', selected_end_date: '2026-11-06', effective_end_date: '2026-11-06' }); d.endpoint.valuation_date = '2026-11-06';
+  assert.ok(!details(d).includes('open'));
+  for (const change of [v => v.period.requested_start_date = '2026-10-24', v => v.period.effective_baseline_date = '2026-10-26', v => v.period.selected_end_date = '2026-11-05', v => v.endpoint.valuation_date = '2026-11-07']) {
+    const altered = structuredClone(d); change(altered); assert.ok(details(altered).includes('open=""'));
+  }
+  assert.ok(details(fixtures.weekend).includes('open=""'));
+});
+
+test('report quantities preserve whole, fractional, tiny, zero and null values without changing the document', () => {
+  for (const [quantity, text] of [[63, '>63</span>'], [1.5, '>1.5</span>'], [1e-11, '>1E-11</span>'], [0, '>0</span>'], [null, '>Unavailable</span>']]) {
+    const d = clone(); d.holdings.holdings[0].quantity = quantity;
+    const before = structuredClone(d); const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+    assert.ok(html.includes(text), text); assert.ok(!html.includes('63.00000000')); assert.deepEqual(d, before);
+  }
+});
+
+test('unavailable and incomplete holdings have different messages from a validated empty collection', () => {
+  const d = clone(); d.holdings.holdings = []; d.holdings.valuation_complete = false;
+  let html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  assert.ok(html.includes('incomplete valuation')); assert.ok(!html.includes('No invested holdings.'));
+  d.holdings = null; html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  assert.ok(html.includes('Holdings unavailable')); assert.ok(!html.includes('No invested holdings.'));
+  d.allocation = null; html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  assert.ok(html.includes('Allocation unavailable'));
+});

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getPortfolioHoldings } from '../api/portfolio';
 import type { HoldingsResponse } from '../api/portfolio';
+import { QuantityValue } from '../components/QuantityValue';
 import { AllocationDonut } from '../components/AllocationDonut';
-import { formatOptionalCurrency, formatQuantity, formatValuationDate, formatWeight } from '../lib/format';
+import { formatOptionalCurrency, formatValuationDate, formatWeight } from '../lib/format';
 
 type State = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; data: HoldingsResponse };
 const gainClass = (value: number | null) => value === null || value === 0 ? undefined : value < 0 ? 'value-negative' : 'value-positive';
@@ -69,7 +70,7 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
             <tbody>{data.holdings.map((holding) => <tr key={holding.ticker}>
               <th scope="row"><strong>{holding.ticker}</strong><span className="instrument-name">{holding.instrument_name}</span>
                 {holding.currency_status === 'conflict' && <span className="holding-issue">Currency conflict · values excluded</span>}</th>
-              <td>{formatQuantity(holding.quantity)}</td>
+              <td><QuantityValue value={holding.quantity} /></td>
               <td>{formatOptionalCurrency(holding.market_price, holding.market_price_currency)}<span className="cell-note">{holding.market_price_currency}</span></td>
               <td><details className="price-details"><summary className={`price-status price-${holding.price_status}`}
                 aria-label={`${holding.ticker} price freshness: ${priceLabels[holding.price_status]}`}>{priceLabels[holding.price_status]}</summary>

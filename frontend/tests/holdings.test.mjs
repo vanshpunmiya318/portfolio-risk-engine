@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { getPortfolioSummary, getPortfolioHoldings } from '../src/api/portfolio.ts';
 import { buildAllocation } from '../src/lib/allocation.ts';
-import { formatOptionalCurrency, formatQuantity, formatValuationDate, formatWeight } from '../src/lib/format.ts';
+import { formatDisplayValue, formatOptionalCurrency, formatQuantity, formatValuationDate, formatWeight } from '../src/lib/format.ts';
 
 const nativeFetch = globalThis.fetch;
 after(() => { globalThis.fetch = nativeFetch; });
@@ -204,4 +204,23 @@ test('Overview preserves null and rejects null financial fields instead of manuf
   respond(null); assert.equal(await getPortfolioSummary(signal(), 7), null);
   respond({ portfolio_id: 7, name: 'Other', currency: 'GBP', as_of_date: '2026-01-05', total_equity: null, net_contributions: 0, profit_loss: 0 });
   await assert.rejects(getPortfolioSummary(signal(), 7), /invalid portfolio summary/);
+});
+
+
+test('display formatting distinguishes indices, ratios, percentages and signed percentage-point differences', () => {
+  assert.equal(formatDisplayValue(1.123456789, 'wealth_index'), '1.1235 (index)');
+  assert.equal(formatDisplayValue(.0125, 'fraction'), '1.25%');
+  assert.equal(formatDisplayValue(.0125, 'ratio'), '0.01 (ratio)');
+  assert.equal(formatDisplayValue(.0125, 'percentage_points'), '+1.25 pp');
+  assert.equal(formatDisplayValue(-.0125, 'percentage_points'), '-1.25 pp');
+  assert.equal(formatDisplayValue(-.0125, 'fraction'), '-1.25%');
+  assert.equal(formatDisplayValue(0, 'fraction'), '0.00%');
+  for (const unit of ['wealth_index', 'fraction', 'ratio', 'percentage_points']) assert.equal(formatDisplayValue(null, unit), 'Unavailable');
+});
+
+test('share quantities trim whole-share padding and retain fractions including tiny nonzero values', () => {
+  assert.equal(formatQuantity(63), '63'); assert.equal(formatQuantity(0), '0');
+  assert.equal(formatQuantity(1.5), '1.5'); assert.equal(formatQuantity(1.0000000001), '1.0000000001');
+  assert.equal(formatQuantity(1e-11), '1E-11'); assert.equal(formatQuantity(Number.MIN_VALUE), '5E-324');
+  assert.equal(formatQuantity(-1e-11), '-1E-11'); assert.equal(formatQuantity(null), 'Unavailable');
 });

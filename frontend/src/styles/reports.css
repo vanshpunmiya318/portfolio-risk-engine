@@ -23,3 +23,13 @@
   .report-actions { flex-direction: column; }
   .report-actions button { width: 100%; }
 }
+
+.report-section { scroll-margin-top: var(--space-6); margin-top: var(--space-8); }
+.report-section > h2 { font-size: 1.4rem; margin-bottom: var(--space-4); }
+.report-panel h3 { font-size: 1.05rem; font-weight: 600; margin: 0 0 var(--space-4); }
+.report-section-nav { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-6) 0; }
+.report-section-nav a { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-control); color: var(--color-accent); font-size: .8rem; }
+.report-section-nav a:hover { background: var(--color-accent-surface); }
+.report-date-details { margin-top: var(--space-6); }
+.report-observations { margin-top: var(--space-4); color: var(--color-text-muted); font-size: .8rem; }
+.report-observations summary { cursor: pointer; padding: var(--space-2) 0; }

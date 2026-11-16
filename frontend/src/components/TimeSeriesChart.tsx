@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { chartBounds, chartSegments, dateNumber, observationIndex } from '../lib/performanceCharts';
 import type { TimeSeriesLine } from '../lib/performanceCharts';
-import { formatValuationDate, formatWeight } from '../lib/format';
+import { formatDisplayValue, formatValuationDate, formatWeight } from '../lib/format';
 
 interface Props {
   title: string; description: string; lines: TimeSeriesLine[]; unit: 'wealth_index' | 'fraction';
@@ -66,9 +66,10 @@ export function TimeSeriesChart({ title, description, lines, unit, start, end, c
         <div className="chart-observation" id={`${id}-tooltip`} role="status" aria-live="polite" aria-atomic="true">
           <time dateTime={active}>{formatValuationDate(active)}</time>
           {valuesAt(active).map(({ line, point }) => <span key={line.id}><strong>{line.label}: </strong>{point
-            ? <>{unit === 'wealth_index' ? point.value!.toString() : formatWeight(point.value === 0 ? 0 : point.value!)}{unit === 'fraction' && <span className="chart-exact-value"> (fraction {point.value!.toString()})</span>}</>
+            ? formatDisplayValue(point.value!, unit)
             : 'Unavailable for this date'}</span>)}
         </div>
+        <p className="panel-caption">Selected values are rounded for readability. The exact-observation table retains full precision; {unit === 'fraction' ? 'drawdown values there are decimal fractions.' : 'wealth values there are normalized indices.'}</p>
         <label className="chart-selection" htmlFor={`${id}-observation`}>Select observation <span className="panel-caption">Arrow keys move; Home/End select boundaries</span></label>
         <input id={`${id}-observation`} className="chart-slider" type="range" min="0" max={dates.length - 1} step="1" value={activeIndex}
           aria-valuetext={formatValuationDate(active)} aria-describedby={`${id}-tooltip`} onChange={event => setSelected(Number(event.target.value))}

@@ -4,3 +4,8 @@
 .risk-information h3 { margin: 0; font-size: .9rem; font-weight: 600; }
 .risk-information ul { padding-left: var(--space-6); margin-bottom: 0; }
 .risk-information code { overflow-wrap: anywhere; }
+
+.performance-metrics .summary-metric dd.risk-explanation, .risk-explanation {
+  margin: var(--space-3) 0 0; color: var(--color-text-muted); font-size: .8rem;
+  font-weight: 400; letter-spacing: normal; line-height: 1.6;
+}

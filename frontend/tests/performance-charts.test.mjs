@@ -121,3 +121,16 @@ with closing(sqlite3.connect(Path('../data/historical_portfolio.db').resolve().a
   assert.equal(JSON.stringify(actual.points), JSON.stringify(drawdown));
   assert.equal(Math.max(...actual.points.map(p => p.value)), performance.portfolio_metrics.maximum_drawdown.value);
 });
+
+
+test('selected observations are concise while exact tables and supplied chart data retain full precision', () => {
+  for (const [unit, value, label] of [['wealth_index', 1.1234567891234567, '1.1235 (index)'], ['fraction', .1234567891234567, '12.35%']]) {
+    const source = { ...line(), points: points([value, value, value, value]) };
+    const before = structuredClone(source);
+    const html = renderToStaticMarkup(createElement(TimeSeriesChart, { title: 'Precision', description: 'Recorded observations', lines: [source], unit, start: days[0], end: days[3] }));
+    const readout = html.split('class="chart-observation"')[1].split('</div>')[0];
+    assert.ok(readout.includes(label)); assert.ok(!readout.includes(String(value)));
+    assert.ok(html.includes(`<td>${value}</td>`)); assert.ok(html.includes('full precision'));
+    assert.deepEqual(source, before);
+  }
+});
