@@ -23,14 +23,13 @@ from riskengine.db.portfolios import (
     get_total_portfolio_equity,
     get_portfolio_equity_curve,
 )
+from riskengine.db.streamlit_transactions import (
+    transaction_writes_allowed, record_streamlit_transaction,
+)
 from riskengine.db.transactions import get_net_cash_flows
 
 from riskengine.db.transactions import (
-    add_transaction,
-    get_positions,
     get_cash_balance,
-    validate_transactions,
-    validate_cash_balances,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -666,8 +665,11 @@ elif page == "Transactions":
     st.divider()
     st.subheader("Add Transaction")
 
+    writes_allowed = transaction_writes_allowed(DATABASE, DEMO_MODE)
     st.info(
-        "This form records trades in the demonstration database. "
+        "Transaction writes require RISKENGINE_ALLOW_TRANSACTION_WRITES=1 and "
+        "RISKENGINE_DB pointing to an existing, separate user-owned database. "
+        "Bundled historical and demo databases and demo mode are always protected. "
         "It does not place real market orders. "
         "Historical reports are not automatically regenerated."
     )
@@ -721,10 +723,10 @@ elif page == "Transactions":
         submitted = st.form_submit_button(
             "Record Transaction",
             type="primary",
-            disabled=DEMO_MODE,
+            disabled=not writes_allowed,
         )
 
-    if submitted and not DEMO_MODE:
+    if submitted:
         instrument_id = int(
             instruments.loc[
                 instruments["ticker"] == ticker, "id"
@@ -732,84 +734,10 @@ elif page == "Transactions":
         )
 
         try:
-            with get_connection(DATABASE, read_only=DEMO_MODE) as connection:
-                price_exists = connection.execute(
-                    """
-                    SELECT 1 FROM prices
-                    WHERE instrument_id = ? AND date = ?
-                    LIMIT 1
-                    """,
-                    (instrument_id, trade_date.isoformat()),
-                ).fetchone()
-                if price_exists is None:
-                    raise ValueError(
-                        f"No {ticker} closing price for {trade_date}. "
-                        "Choose a date with market data."
-                    )
-
-                positions = get_positions(
-                    connection,
-                    portfolio_id,
-                    trade_date.isoformat(),
-                )
-
-                current_shares = 0.0
-
-                matching = positions.loc[
-                    positions["ticker"] == ticker,
-                    "quantity",
-                ]
-
-                if not matching.empty:
-                    current_shares = float(matching.iloc[0])
-
-                available_cash = get_cash_balance(
-                    connection,
-                    portfolio_id,
-                    trade_date.isoformat(),
-                )
-
-                if (
-                    transaction_type == "SELL"
-                    and quantity > current_shares + 1e-9
-                ):
-                    raise ValueError(
-                        f"Insufficient shares. "
-                        f"Available: {current_shares:g}"
-                    )
-
-                if (
-                    transaction_type == "BUY"
-                    and trade_value > available_cash + 1e-9
-                ):
-                    raise ValueError(
-                        f"Insufficient cash. "
-                        f"Available: ${available_cash:,.2f}"
-                    )
-
-                # The transaction and validation are atomic:
-                # failures roll back the new record.
-                with connection:
-                    add_transaction(
-                        connection,
-                        portfolio_id,
-                        instrument_id,
-                        trade_date.isoformat(),
-                        transaction_type,
-                        int(quantity),
-                        float(price),
-                        "USD",
-                        "streamlit_dashboard",
-                    )
-
-                    validate_transactions(
-                        connection,
-                        portfolio_id,
-                    )
-                    validate_cash_balances(
-                        connection,
-                        portfolio_id,
-                    )
+            record_streamlit_transaction(
+                DATABASE, DEMO_MODE, portfolio_id, instrument_id, ticker,
+                trade_date.isoformat(), transaction_type, quantity, price,
+            )
 
             st.success(
                 f"Recorded {transaction_type} "

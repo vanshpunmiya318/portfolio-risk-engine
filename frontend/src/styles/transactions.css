@@ -1,0 +1,11 @@
+.transactions-table td, .transactions-table th { text-align: left; }
+.transactions-table td:nth-child(2), .transactions-table td:last-child { white-space: normal; min-width: 12rem; overflow-wrap: anywhere; }
+.transactions-table .cell-note { display: block; }
+.transaction-issues { margin: .5rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: .8rem; max-width: 28rem; }
+
+.transactions-table th:first-child { min-width: 8rem; }
+.transactions-table .recorded-number { text-align: right; }
+.transactions-scroll-note { display: none; }
+@media (max-width: 700px) {
+  .transactions-scroll-note { display: block; }
+}

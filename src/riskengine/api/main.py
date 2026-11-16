@@ -13,6 +13,8 @@ from fastapi.responses import Response
 
 from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
 from riskengine.api.allocation_models import AllocationResponse
+from riskengine.api.transaction_models import TransactionsResponse
+from riskengine.risk.transaction_history import HistoryDataConflict, get_transactions_history
 from riskengine.api.report_models import ReportResponse
 from riskengine.risk.report_service import get_report_response
 from riskengine.risk.report_exports import report_json, report_markdown, report_filename
@@ -292,4 +294,22 @@ def portfolio_allocation(
     except HoldingsInputError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except HoldingsDataConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/api/portfolios/{portfolio_id}/transactions", response_model=TransactionsResponse)
+def portfolio_transactions(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+):
+    db_path = request.app.state.database.path
+    if not db_path.is_file():
+        raise HTTPException(status_code=404, detail="Portfolio database not found")
+    try:
+        with closing(get_connection(db_path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            return get_transactions_history(connection, portfolio_id)
+    except PortfolioNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except HistoryDataConflict as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
