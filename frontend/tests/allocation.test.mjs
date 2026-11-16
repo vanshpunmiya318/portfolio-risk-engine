@@ -108,7 +108,7 @@ test('cancellation and identity prevent stale responses and retries recover', as
 });
 test('page labels cash exclusion, provenance, requested/effective dates and live chart accessibly', () => {
   const loading = renderToStaticMarkup(createElement(page.PortfolioAllocation));
-  for (const text of ['Loading allocation', 'As-of date', 'Apply', 'Latest available', 'Changes fetch only on Apply']) assert.ok(loading.includes(text));
+  for (const text of ['Loading allocation', 'As-of date', 'Apply', 'Latest available', 'Latest available clears the draft date only', 'changes take effect on Apply']) assert.ok(loading.includes(text));
   const d = fixture(); d.requested_valuation_date = '2026-01-09';
   const html = renderToStaticMarkup(createElement(page.AllocationContent, { data: d }));
   for (const text of ['9 January 2026', '5 January 2026', 'Requested date', 'Change from historical starting allocation', 'Excluded from weights and concentration', 'not an investment-policy target', 'recorded transactions and stored exact-date prices', 'not ETF look-through exposure', '+10.00 pp', 'scope="col"', 'scope="row"', 'tabindex="0"', 'Current versus historical starting allocation']) assert.ok(html.includes(text), text);

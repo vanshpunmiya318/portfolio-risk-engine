@@ -9,13 +9,13 @@ type SummaryState =
   | { status: 'empty' }
   | { status: 'ready'; data: PortfolioSummary };
 
-export function Overview() {
+export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
   const [state, setState] = useState<SummaryState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     setState({ status: 'loading' });
-    getPortfolioSummary(controller.signal).then((data) => {
+    getPortfolioSummary(controller.signal, portfolioId).then((data) => {
       if (!controller.signal.aborted) setState(data ? { status: 'ready', data } : { status: 'empty' });
     }).catch((error: unknown) => {
       if (!controller.signal.aborted) setState({
@@ -26,7 +26,7 @@ export function Overview() {
       });
     });
     return () => controller.abort();
-  }, [attempt]);
+  }, [portfolioId, attempt]);
 
   const retry = () => setAttempt((value) => value + 1);
   return (
@@ -34,7 +34,7 @@ export function Overview() {
       <section className="page-intro">
         <p className="eyebrow">Portfolio intelligence</p>
         <h1>Portfolio overview</h1>
-        <p className="lede">Account value and invested capital, grounded in your historical portfolio data.</p>
+        <p className="lede">Portfolio value and invested capital, grounded in your historical portfolio data.</p>
       </section>
       <section className="summary-section" aria-label="Portfolio summary" aria-busy={state.status === 'loading'}>
         {state.status === 'loading' && <div className="summary-state" role="status">
@@ -42,7 +42,7 @@ export function Overview() {
           <p>Retrieving the latest available historical valuation.</p>
         </div>}
         {state.status === 'error' && <div className="summary-state" role="alert">
-          <span className="eyebrow">Connection issue</span><h2>Summary unavailable</h2>
+          <span className="eyebrow">Unable to load</span><h2>Summary unavailable</h2>
           <p>{state.message}</p><button className="summary-button" onClick={retry}>Try again</button>
         </div>}
         {state.status === 'empty' && <div className="summary-state" role="status">
@@ -60,7 +60,7 @@ export function Overview() {
           <dl className="summary-metrics">
             <div className="summary-metric summary-metric-primary"><dt>Total equity</dt>
               <dd>{formatCurrency(state.data.total_equity, state.data.currency)}</dd>
-              <dd className="metric-note">Portfolio account value</dd></div>
+              <dd className="metric-note">Portfolio value including cash</dd></div>
             <div className="summary-metric"><dt>Net contributions</dt>
               <dd>{formatCurrency(state.data.net_contributions, state.data.currency)}</dd>
               <dd className="metric-note">Net capital contributed</dd></div>

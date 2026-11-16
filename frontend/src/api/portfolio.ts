@@ -23,8 +23,9 @@ function isSummary(value: unknown): value is PortfolioSummary {
     );
 }
 
-export async function getPortfolioSummary(signal: AbortSignal): Promise<PortfolioSummary | null> {
-  const response = await fetch('/api/portfolio/summary', {
+export async function getPortfolioSummary(signal: AbortSignal, portfolioId = 1): Promise<PortfolioSummary | null> {
+  if (!Number.isSafeInteger(portfolioId) || portfolioId <= 0) throw new Error('Configure a positive integer portfolio ID.');
+  const response = await fetch(`/api/portfolios/${portfolioId}/summary`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
     headers: { Accept: 'application/json' },
   });
@@ -33,11 +34,13 @@ export async function getPortfolioSummary(signal: AbortSignal): Promise<Portfoli
     const body: unknown = await response.json().catch(() => null);
     if (typeof body === 'object' && body !== null && 'detail' in body &&
       ['No portfolio found', 'No market prices available'].includes(String(body.detail))) return null;
+    if (typeof body === 'object' && body !== null && 'detail' in body && typeof body.detail === 'string') throw new Error(`Portfolio request failed (HTTP 404). ${body.detail}`);
   }
   if (!response.ok) throw new Error(`Portfolio request failed (HTTP ${response.status}).`);
   const data: unknown = await response.json();
   if (data === null) return null;
   if (!isSummary(data)) throw new Error('The API returned an invalid portfolio summary.');
+  if (data.portfolio_id !== portfolioId) throw new Error(`Portfolio request failed: Overview returned portfolio ${data.portfolio_id}, but portfolio ${portfolioId} is configured.`);
   return data;
 }
 

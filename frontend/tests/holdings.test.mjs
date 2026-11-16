@@ -1,7 +1,7 @@
 // Synthetic values are confined to tests; the application only uses API data.
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
-import { getPortfolioHoldings } from '../src/api/portfolio.ts';
+import { getPortfolioSummary, getPortfolioHoldings } from '../src/api/portfolio.ts';
 import { buildAllocation } from '../src/lib/allocation.ts';
 import { formatOptionalCurrency, formatQuantity, formatValuationDate, formatWeight } from '../src/lib/format.ts';
 
@@ -164,4 +164,44 @@ test('rendered content exposes incomplete valuation, foreign price currency and 
     const empty = fixture(); empty.holdings = []; empty.totals.holding_count = 0;
     assert.match(renderToStaticMarkup(createElement(HoldingsContent, { data: empty, retry() {} })), /No open holdings/);
   } finally { await server.close(); }
+});
+
+
+test('Overview requests the configured portfolio ID and rejects a mismatched response', async () => {
+  const data = { portfolio_id: 7, name: 'Configured portfolio', currency: 'GBP', as_of_date: '2026-01-05', total_equity: 0, net_contributions: 0, profit_loss: 0 };
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, '/api/portfolios/7/summary');
+    assert.equal(options.headers.Accept, 'application/json');
+    assert.ok(options.signal instanceof AbortSignal);
+    return new Response(JSON.stringify(data));
+  };
+  assert.deepEqual(await getPortfolioSummary(signal(), 7), data);
+  respond(data);
+  await assert.rejects(getPortfolioSummary(signal(), 2), /Overview returned portfolio 7, but portfolio 2 is configured/);
+  let requested = false; globalThis.fetch = async () => { requested = true; throw new Error('must not fetch'); };
+  await assert.rejects(getPortfolioSummary(signal(), 0), /positive integer/);
+  assert.equal(requested, false);
+});
+
+test('Overview retains empty and HTTP-error behavior when portfolio identity is configured', async () => {
+  globalThis.fetch = async () => new Response(null, { status: 204 });
+  assert.equal(await getPortfolioSummary(signal(), 7), null);
+  respond({ detail: 'No market prices available' }, 404);
+  assert.equal(await getPortfolioSummary(signal(), 7), null);
+  respond({ detail: 'Conflict' }, 409);
+  await assert.rejects(getPortfolioSummary(signal(), 7), /Portfolio request failed \(HTTP 409\)/);
+});
+
+
+test('Overview treats a missing configured portfolio as an error without legacy fallback', async () => {
+  const requests = [];
+  globalThis.fetch = async (url) => { requests.push(url); return new Response(JSON.stringify({ detail: 'Portfolio 42 not found' }), { status: 404 }); };
+  await assert.rejects(getPortfolioSummary(signal(), 42), /HTTP 404.*Portfolio 42 not found/);
+  assert.deepEqual(requests, ['/api/portfolios/42/summary']);
+});
+
+test('Overview preserves null and rejects null financial fields instead of manufacturing zeros', async () => {
+  respond(null); assert.equal(await getPortfolioSummary(signal(), 7), null);
+  respond({ portfolio_id: 7, name: 'Other', currency: 'GBP', as_of_date: '2026-01-05', total_equity: null, net_contributions: 0, profit_loss: 0 });
+  await assert.rejects(getPortfolioSummary(signal(), 7), /invalid portfolio summary/);
 });

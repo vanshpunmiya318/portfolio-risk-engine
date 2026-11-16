@@ -32,7 +32,7 @@ export function App() {
         <p className="nav-label">Workspace</p>
         <nav aria-label="Main navigation" className="page-nav">
           {pages.map((page, index) => (
-            <NavLink key={page.path} to={page.path}>
+            <NavLink key={page.path} to={page.path} onFocus={event => event.currentTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' })}>
               <span className="nav-number" aria-hidden="true">{String(index + 1).padStart(2, '0')}</span>
               {page.title}
             </NavLink>
@@ -50,7 +50,7 @@ export function App() {
         <main id="main-content" tabIndex={-1}>
           <Routes>
             <Route path="/" element={<Navigate to="/overview" replace />} />
-            <Route path="/overview" element={<Overview />} />
+            <Route path="/overview" element={<Overview portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
             <Route path="/holdings" element={<Holdings portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
             <Route path="/performance" element={<Performance portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
             <Route path="/risk-analytics" element={<RiskAnalytics portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />

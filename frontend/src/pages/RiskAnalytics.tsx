@@ -41,7 +41,8 @@ export function RiskAnalytics({ portfolioId = 1 }: { portfolioId?: number }) {
       <label>Start date<input type="date" value={start} onChange={e => setStart(e.target.value)} /></label>
       <label>End date<input type="date" value={end} onChange={e => setEnd(e.target.value)} /></label>
       <label>Confidence level<select value={confidence} onChange={e => setConfidence(e.target.value)}><option value=".90">90%</option><option value=".95">95%</option><option value=".99">99%</option></select></label>
-      <button type="submit" className="summary-button">Apply</button><p className="filter-note">Full history clears date boundaries. Changes take effect only when Apply is clicked.</p>
+      <button type="submit" className="summary-button">Apply</button><p className="filter-note">Blank dates use automatic history boundaries. Full history clears draft dates only. Changes take effect on Apply.</p>
+      {(start !== (applied.start_date ?? '') || end !== (applied.end_date ?? '') || Number(confidence) !== applied.confidence) && <p className="filter-note" role="status">Unapplied changes. Displayed results still use the applied dates and confidence.</p>}
       {validation && <p className="filter-error" role="alert">{validation}</p>}
     </form>
     <section aria-label="Risk analysis data" aria-busy={state.status === 'loading'}>

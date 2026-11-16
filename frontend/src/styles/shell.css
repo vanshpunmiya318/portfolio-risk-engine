@@ -40,8 +40,8 @@ main { padding: var(--space-12); max-width: 100rem; margin: auto; }
   .app-shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { padding: var(--space-6); border-right: 0; border-bottom: 1px solid var(--color-border); }
   .nav-label, .sidebar-footer { display: none; }
-  .page-nav { display: flex; overflow-x: auto; margin-top: var(--space-6); padding-bottom: var(--space-2); }
-  .page-nav a { flex-shrink: 0; }
+  .page-nav { display: flex; overflow-x: auto; margin-top: var(--space-6); padding: 6px 6px var(--space-2); scroll-padding-inline: 6px; }
+  .page-nav a { flex-shrink: 0; scroll-margin-inline: 6px; }
   .nav-number { display: none; }
 }
 @media (max-width: 540px) {

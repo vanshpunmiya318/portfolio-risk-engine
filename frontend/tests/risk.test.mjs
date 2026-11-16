@@ -90,7 +90,7 @@ test('request identity and cancellation prevent stale responses; retry recovers'
 });
 test('Risk page preserves Apply-only controls, dates, negative estimates and ratios', () => {
   const loading = renderToStaticMarkup(createElement(page.RiskAnalytics));
-  for (const text of ['Full history', 'Start date', 'End date', 'Confidence level', '90%', '95%', '99%', 'Apply', 'only when Apply is clicked', 'Loading risk analysis']) assert.ok(loading.includes(text), text);
+  for (const text of ['Full history', 'Start date', 'End date', 'Confidence level', '90%', '95%', '99%', 'Apply', 'Full history clears draft dates only', 'Changes take effect on Apply', 'Loading risk analysis']) assert.ok(loading.includes(text), text);
   assert.equal(page.riskMetricLabel(metric(-.02)), '-2.00%'); assert.equal(page.riskMetricLabel(metric(0)), '0.00%');
   assert.equal(page.riskMetricLabel(metric(.8, 'ratio')), '0.80'); assert.equal(page.riskMetricLabel(metric(null)), 'Unavailable');
   const d = fixture(); d.period.requested_start_date = '2026-01-04';

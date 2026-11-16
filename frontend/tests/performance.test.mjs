@@ -131,7 +131,7 @@ test('Performance content exposes dates, null reasons, comparison units and live
   try {
     const { Performance, PerformanceContent, metricLabel, differenceLabel } = await server.ssrLoadModule('/src/pages/Performance.tsx');
     const loading = renderToStaticMarkup(createElement(Performance));
-    for (const text of ['Loading performance', 'Full history', 'Apply dates', 'type="date"']) assert.ok(loading.includes(text));
+    for (const text of ['Loading performance', 'Full history', 'Full history clears draft dates only', 'Apply dates', 'type="date"']) assert.ok(loading.includes(text));
     assert.equal(metricLabel(metric(0)), '0.00%'); assert.equal(metricLabel(metric(null)), 'Unavailable');
     assert.equal(metricLabel(metric(1.2, 'ratio')), '1.20');
     assert.equal(differenceLabel(metric(-.0397)), '-3.97 percentage points');

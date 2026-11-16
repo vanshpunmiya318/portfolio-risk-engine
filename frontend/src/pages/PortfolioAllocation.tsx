@@ -31,7 +31,8 @@ export function PortfolioAllocation({ portfolioId = 1 }: { portfolioId?: number 
     <form className="performance-filters" aria-label="Allocation valuation date" onSubmit={event => { event.preventDefault(); apply(); }}>
       <label>As-of date<input type="date" value={draft} onChange={e => setDraft(e.target.value)} /></label>
       <button type="button" className="summary-button" onClick={() => { setDraft(''); setValidation(''); }}>Latest available</button>
-      <button type="submit" className="summary-button">Apply</button><p className="filter-note">Blank date uses the latest available cutoff. Changes fetch only on Apply. Explicit historical cutoffs require exact-date prices.</p>
+      <button type="submit" className="summary-button">Apply</button><p className="filter-note">Blank date uses the latest available cutoff. Latest available clears the draft date only; changes take effect on Apply. Explicit historical cutoffs require exact-date prices.</p>
+      {draft !== (applied.day ?? '') && <p className="filter-note" role="status">Unapplied changes. Displayed results still use the applied valuation cutoff.</p>}
       {validation && <p className="filter-error" role="alert">{validation}</p>}
     </form>
     <section aria-label="Allocation data" aria-busy={state.status === 'loading'}>

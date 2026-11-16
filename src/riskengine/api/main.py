@@ -162,6 +162,19 @@ def portfolio_holdings(
 
 @app.get("/api/portfolio/summary")
 def portfolio_summary(request: Request):
+    return _portfolio_summary(request)
+
+
+@app.get("/api/portfolios/{portfolio_id}/summary")
+def portfolio_summary_by_id(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=9223372036854775807)],
+):
+    return _portfolio_summary(request, portfolio_id)
+
+
+def _portfolio_summary(request: Request, portfolio_id: int | None = None):
+    """Share the existing Overview calculations; only portfolio selection differs."""
     db_path = request.app.state.database.path
 
     if not db_path.is_file():
@@ -170,15 +183,18 @@ def portfolio_summary(request: Request):
             detail="Portfolio database not found",
         )
 
-    with get_connection(db_path, read_only=True) as connection:
-        portfolio = connection.execute(
-            "SELECT id, name, currency FROM portfolios ORDER BY id LIMIT 1"
+    with closing(get_connection(db_path, read_only=True)) as connection:
+        connection.execute("BEGIN")
+        portfolio = (
+            connection.execute("SELECT id, name, currency FROM portfolios ORDER BY id LIMIT 1")
+            if portfolio_id is None else
+            connection.execute("SELECT id, name, currency FROM portfolios WHERE id = ?", (portfolio_id,))
         ).fetchone()
 
         if portfolio is None:
             raise HTTPException(
                 status_code=404,
-                detail="No portfolio found",
+                detail="No portfolio found" if portfolio_id is None else f"Portfolio {portfolio_id} not found",
             )
 
         portfolio_id, name, currency = portfolio

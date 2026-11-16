@@ -54,12 +54,13 @@ export function Performance({ portfolioId = 1 }: { portfolioId?: number }) {
       <p className="lede">Investment returns and benchmark context, grounded in verified historical coverage.</p></section>
     <form className="performance-filters" onSubmit={event => { event.preventDefault(); apply(); }} aria-label="Performance date range">
       <button type="button" className="summary-button" onClick={() => {
-        setStart(''); setEnd(''); setValidation(''); setApplied({});
+        setStart(''); setEnd(''); setValidation('');
       }}>Full history</button>
       <label>Start date<input type="date" value={start} onChange={event => setStart(event.target.value)} /></label>
       <label>End date<input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
       <button className="summary-button" type="submit">Apply dates</button>
-      <p className="filter-note">Blank boundaries use available history. Dates are applied only when submitted.</p>
+      <p className="filter-note">Blank boundaries use available history. Full history clears draft dates only. Changes take effect on Apply dates.</p>
+      {(start !== (applied.start_date ?? '') || end !== (applied.end_date ?? '')) && <p className="filter-note" role="status">Unapplied changes. Displayed results still use the applied dates.</p>}
       {validation && <p role="alert" className="filter-error">{validation}</p>}
     </form>
     <section aria-label="Performance data" aria-busy={state.status === 'loading'}>
