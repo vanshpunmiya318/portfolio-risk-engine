@@ -19,7 +19,6 @@
 .holdings-table th, .holdings-table td { padding: var(--space-3); border-bottom: 1px solid var(--color-border); text-align: right; vertical-align: top; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .holdings-table thead th { color: var(--color-text-muted); font-weight: 500; font-size: .7rem; }
 .holdings-table th:first-child { text-align: left; min-width: 12rem; }
-.holdings-table th:nth-child(4), .holdings-table td:nth-child(4) { text-align: left; }
 .holdings-table tbody th { font-weight: 500; }
 .holdings-table tbody tr:last-child > * { border-bottom: 0; }
 .instrument-name { display: block; max-width: 16rem; white-space: normal; color: var(--color-text-muted); font-weight: 400; font-size: .75rem; margin-top: var(--space-1); }
@@ -58,3 +57,20 @@
 
 .quantity-details summary { cursor: pointer; }
 .quantity-details .cell-note { white-space: normal; overflow-wrap: anywhere; }
+
+/* Column roles apply to headers and cells without assuming a column position. */
+:is(.positions-table, .allocation-table, .transactions-table, .report-table) thead th { white-space: normal; }
+.holdings-table .table-number { text-align: right; white-space: nowrap; }
+.holdings-table thead .table-number { white-space: normal; }
+.holdings-table .table-identity { text-align: left; min-width: 8rem; max-width: 16rem; white-space: normal; overflow-wrap: anywhere; }
+.holdings-table th.table-identity { min-width: 8rem; }
+.holdings-table .table-status, .holdings-table .table-metadata { text-align: left; min-width: 7rem; max-width: 20rem; white-space: normal; overflow-wrap: anywhere; }
+.holdings-table .table-date, .holdings-table .table-currency { text-align: left; white-space: nowrap; }
+.holdings-table .table-type { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.positions-table .cell-note, .allocation-table .cell-note, .transactions-table .cell-note, .report-table .cell-note { font-size: .75rem; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
+.table-scroll-hint { margin: var(--space-2) 0; color: var(--color-text-muted); font-size: .75rem; }
+.financial-table-scroll { padding: 6px; scroll-padding-inline: 6px; }
+.financial-table-scroll summary { scroll-margin-inline: 6px; }
+@media (max-width: 1024px) {
+  .positions-table th, .positions-table td, .allocation-table th, .allocation-table td, .transactions-table th, .transactions-table td, .report-table th, .report-table td { padding: var(--space-2); }
+}

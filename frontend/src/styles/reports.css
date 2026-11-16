@@ -9,8 +9,7 @@
 .report-notes ul { padding-left: var(--space-4); max-height: 22rem; overflow-y: auto; }
 .report-notes li + li { margin-top: var(--space-3); }
 .report-notes code { overflow-wrap: anywhere; }
-.report-table td { white-space: normal; min-width: 10rem; }
-.report-table th:first-child { min-width: 10rem; white-space: normal; }
+.report-table .table-identity { min-width: 8rem; }
 .report-table .cell-note { white-space: normal; }
 .report-definitions { display: grid; gap: var(--space-3); font-size: .8rem; }
 .report-definitions dt { color: var(--color-text-muted); }

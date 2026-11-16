@@ -17,6 +17,18 @@ before(async () => {
   ({ AllocationComparisonChart } = await server.ssrLoadModule('/src/components/AllocationComparisonChart.tsx'));
 });
 after(async () => { globalThis.fetch = originalFetch; await server?.close(); });
+
+test('allocation tables retain row headers, numeric roles and described scroll regions', () => {
+  const data = fixture(); const before = structuredClone(data);
+  const html = renderToStaticMarkup(createElement(page.AllocationContent, { data }));
+  assert.equal((html.match(/class="holdings-table allocation-table"/g) ?? []).length, 2);
+  assert.match(html, /scope="row" class="table-identity"/);
+  assert.match(html, /scope="col" class="table-number">Market value/);
+  const hints = [...html.matchAll(/<p id="([^"]+)" class="table-scroll-hint">If columns extend/g)];
+  assert.equal(hints.length, 2);
+  for (const [, id] of hints) assert.ok(html.includes(`aria-describedby="${id}"`));
+  assert.deepEqual(data, before);
+});
 const issue = (scope = 'reference') => ({ code: 'incomplete_valuation', message: 'Exact-date valuation unavailable.', scope, ticker: null });
 const security = (ticker, weight, value, day) => ({ ticker, instrument_name: `${ticker} fund`, classification: 'Instrument metadata', quantity: 1, effective_price_date: day, price_status: 'current', market_value: value, weight });
 const snapshot = (day, weights) => ({ valuation_date: day, valuation_complete: true, invested_value: 100, cash_balance: 20,

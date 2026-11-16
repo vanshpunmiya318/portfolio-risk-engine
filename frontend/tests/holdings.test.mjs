@@ -161,6 +161,13 @@ test('rendered content exposes incomplete valuation, foreign price currency and 
     assert.match(complete, /<details class="price-details"/);
     assert.match(complete, /ONE price freshness: Exact-date price/);
     assert.match(complete, /0 calendar days old at cutoff/);
+    assert.match(complete, /scope="row" class="table-identity"/);
+    assert.match(complete, /class="table-status"><details class="price-details"/);
+    assert.match(complete, /class="table-number">/);
+    const hint = complete.match(/<p id="([^"]+)" class="table-scroll-hint">If columns extend/);
+    assert.ok(hint);
+    assert.ok(complete.includes(`aria-describedby="${hint[1]}"`));
+    assert.match(complete, /role="region" tabindex="0"/);
     const empty = fixture(); empty.holdings = []; empty.totals.holding_count = 0;
     assert.match(renderToStaticMarkup(createElement(HoldingsContent, { data: empty, retry() {} })), /No open holdings/);
   } finally { await server.close(); }

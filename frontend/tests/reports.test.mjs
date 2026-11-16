@@ -29,6 +29,20 @@ after(async () => { globalThis.fetch = nativeFetch; await server?.close(); });
 const clone = () => structuredClone(fixtures.healthy);
 const query = { start_date: '2026-10-23', end_date: '2026-11-06', benchmark: 'SPY', confidence: .95 };
 const signal = () => new AbortController().signal;
+
+test('report tables distinguish numbers from status text and describe each scroll region', () => {
+  const data = clone(); const before = structuredClone(data);
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data }));
+  const holdings = html.split('<caption class="sr-only">Holdings summary</caption>')[1].split('</table>')[0];
+  assert.match(holdings, /class="table-number">Quantity/);
+  assert.match(holdings, /class="table-status">Price date/);
+  assert.match(holdings, /scope="row" class="table-identity"/);
+  const hints = [...html.matchAll(/<p id="([^"]+)" class="table-scroll-hint">If columns extend/g)];
+  assert.ok(hints.length > 4);
+  assert.equal(new Set(hints.map(h => h[1])).size, hints.length);
+  for (const [, id] of hints) assert.ok(html.includes(`aria-describedby="${id}"`));
+  assert.deepEqual(data, before);
+});
 const respond = (data, status = 200) => new Response(typeof data === 'string' ? data : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const artifact = (report = clone()) => ({ id: 1, query: { ...query }, report, jsonText: JSON.stringify(report, null, 2) + '\n' });
 

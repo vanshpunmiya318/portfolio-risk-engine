@@ -1,3 +1,4 @@
+import { TableScroll } from '../components/TableScroll';
 import { useEffect, useState } from 'react';
 import { getPortfolioHoldings } from '../api/portfolio';
 import type { HoldingsResponse } from '../api/portfolio';
@@ -64,25 +65,25 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
       <section className="holdings-panel holdings-table-panel" aria-labelledby="positions-title"><div className="panel-heading">
         <h2 id="positions-title">Open positions</h2><span className="panel-caption">Values in {data.currency}, except explicitly labelled prices</span></div>
         <p className="price-details-hint">Open a price status for its observation date and age.</p>
-        <div className="holdings-table-scroll" role="region" aria-label="Holdings table, scroll horizontally for all columns" tabIndex={0}>
-          <table className="holdings-table"><caption className="sr-only">Historical holdings, including price freshness and currency status. Unavailable values are not zero.</caption>
-            <thead><tr>{['Instrument', 'Shares', 'Market price', 'Price freshness', 'Market value', 'Weight', 'Remaining basis', 'Unrealized gain / loss'].map((label) => <th key={label} scope="col">{label}</th>)}</tr></thead>
+        <TableScroll label="Holdings table">
+          <table className="holdings-table positions-table"><caption className="sr-only">Historical holdings, including price freshness and currency status. Unavailable values are not zero.</caption>
+            <thead><tr>{['Instrument', 'Shares', 'Market price', 'Price freshness', 'Market value', 'Weight', 'Remaining basis', 'Unrealized gain / loss'].map((label) => <th key={label} scope="col" className={label === 'Instrument' ? 'table-identity' : label === 'Price freshness' ? 'table-status' : 'table-number'}>{label}</th>)}</tr></thead>
             <tbody>{data.holdings.map((holding) => <tr key={holding.ticker}>
-              <th scope="row"><strong>{holding.ticker}</strong><span className="instrument-name">{holding.instrument_name}</span>
+              <th scope="row" className="table-identity"><strong>{holding.ticker}</strong><span className="instrument-name">{holding.instrument_name}</span>
                 {holding.currency_status === 'conflict' && <span className="holding-issue">Currency conflict · values excluded</span>}</th>
-              <td><QuantityValue value={holding.quantity} /></td>
-              <td>{formatOptionalCurrency(holding.market_price, holding.market_price_currency)}<span className="cell-note">{holding.market_price_currency}</span></td>
-              <td><details className="price-details"><summary className={`price-status price-${holding.price_status}`}
+              <td className="table-number"><QuantityValue value={holding.quantity} /></td>
+              <td className="table-number">{formatOptionalCurrency(holding.market_price, holding.market_price_currency)}<span className="cell-note">{holding.market_price_currency}</span></td>
+              <td className="table-status"><details className="price-details"><summary className={`price-status price-${holding.price_status}`}
                 aria-label={`${holding.ticker} price freshness: ${priceLabels[holding.price_status]}`}>{priceLabels[holding.price_status]}</summary>
                 <span className="cell-note">{holding.effective_price_date ? formatValuationDate(holding.effective_price_date) : 'No observation'}</span>
                 {holding.price_age_days !== null && <span className="cell-note">{holding.price_age_days} calendar days old at cutoff</span>}</details></td>
-              <td>{formatOptionalCurrency(holding.market_value, data.currency)}</td>
-              <td>{formatWeight(holding.invested_weight)}</td>
-              <td>{formatOptionalCurrency(holding.remaining_average_cost_basis, data.currency)}</td>
-              <td className={gainClass(holding.unrealized_gain_loss)}>{formatOptionalCurrency(holding.unrealized_gain_loss, data.currency)}</td>
+              <td className="table-number">{formatOptionalCurrency(holding.market_value, data.currency)}</td>
+              <td className="table-number">{formatWeight(holding.invested_weight)}</td>
+              <td className="table-number">{formatOptionalCurrency(holding.remaining_average_cost_basis, data.currency)}</td>
+              <td className={`table-number ${gainClass(holding.unrealized_gain_loss) ?? ''}`}>{formatOptionalCurrency(holding.unrealized_gain_loss, data.currency)}</td>
             </tr>)}</tbody>
           </table>
-        </div></section>
+        </TableScroll></section>
       <AllocationDonut data={data} />
     </>}
     <p className="valuation-note">Weights exclude cash. Remaining average-cost basis is the cost of open positions, not net transaction investment.

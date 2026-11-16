@@ -1,3 +1,4 @@
+import { TableScroll } from '../components/TableScroll';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createMarkdownLoader, createReportLoader, draftQuery, hasDraftChanges, initialReportDraft, ReportRequestError } from '../api/reports';
@@ -31,12 +32,14 @@ function ObservationCounts({ rows }: { rows: { label: string; counts: string }[]
     {rows.map(row => <div key={row.label}><dt>{row.label}</dt><dd>{row.counts}</dd></div>)}
   </dl></details>;
 }
-function Table({ title, headings, rows, emptyMessage = 'No rows supplied for this section.', metadata }: {
-  title: string; headings: string[]; rows: ReactNode[][]; emptyMessage?: string; metadata?: ReactNode;
+type ColumnRole = 'identity' | 'number' | 'status';
+function Table({ title, headings, rows, emptyMessage = 'No rows supplied for this section.', metadata, columnRoles }: {
+  title: string; headings: string[]; rows: ReactNode[][]; emptyMessage?: string; metadata?: ReactNode; columnRoles?: ColumnRole[];
 }) {
-  return <section className="holdings-panel report-panel"><h3>{title}</h3>{rows.length ? <div className="holdings-table-scroll" role="region" tabIndex={0} aria-label={`${title}, scroll horizontally for all columns`}>
-    <table className="holdings-table report-table"><caption className="sr-only">{title}</caption><thead><tr>{headings.map(h => <th scope="col" key={h}>{h}</th>)}</tr></thead>
-      <tbody>{rows.map((row, i) => <tr key={i}>{row.map((cell, j) => j === 0 ? <th scope="row" key={j}>{cell}</th> : <td key={j}>{cell}</td>)}</tr>)}</tbody></table></div> : <p className="valuation-note" role="status">{emptyMessage}</p>}{metadata}</section>;
+  const role = (index: number) => columnRoles?.[index] ?? (index === 0 ? 'identity' : 'number');
+  return <section className="holdings-panel report-panel"><h3>{title}</h3>{rows.length ? <TableScroll label={title}>
+    <table className="holdings-table report-table"><caption className="sr-only">{title}</caption><thead><tr>{headings.map((h, j) => <th scope="col" key={h} className={`table-${role(j)}`}>{h}</th>)}</tr></thead>
+      <tbody>{rows.map((row, i) => <tr key={i}>{row.map((cell, j) => j === 0 ? <th scope="row" key={j} className={`table-${role(j)}`}>{cell}</th> : <td key={j} className={`table-${role(j)}`}>{cell}</td>)}</tr>)}</tbody></table></TableScroll> : <p className="valuation-note" role="status">{emptyMessage}</p>}{metadata}</section>;
 }
 
 const amountNames = [
@@ -102,7 +105,7 @@ export function ReportContent({ data }: { data: ReportResponse }) {
     </section>
     <section id="report-holdings" className="report-section" aria-labelledby="report-holdings-title" tabIndex={-1}>
       <h2 id="report-holdings-title">Holdings</h2>
-      <Table title="Holdings summary" headings={['Security', 'Quantity', `Market value (${data.currency})`, 'Remaining basis', 'Unrealized price gain/loss', 'Price date / status']} emptyMessage={holdingsEmpty}
+      <Table columnRoles={['identity', 'number', 'number', 'number', 'number', 'status']} title="Holdings summary" headings={['Security', 'Quantity', `Market value (${data.currency})`, 'Remaining basis', 'Unrealized price gain/loss', 'Price date / status']} emptyMessage={holdingsEmpty}
         rows={h?.holdings.map(row => [row.ticker, <QuantityValue value={row.quantity} />, formatOptionalCurrency(row.market_value, data.currency), formatOptionalCurrency(row.remaining_average_cost_basis, data.currency), formatOptionalCurrency(row.unrealized_gain_loss, data.currency), <>{date(row.effective_price_date)}<small className="cell-note">{row.price_status} - Currency {row.currency_status}</small></>]) ?? []} />
       {h !== null && <Notes items={h.warnings} />}
     </section>
@@ -116,7 +119,7 @@ export function ReportContent({ data }: { data: ReportResponse }) {
       <Table title="Security allocation comparison" headings={['Security', 'Current invested weight', 'Historical starting weight', 'Change (pp)']}
         emptyMessage={a === null ? 'Allocation unavailable; see report diagnostics.' : a.changes === null ? 'Allocation comparison unavailable; see current and reference availability notes.' : 'No security comparison rows supplied.'}
         rows={a?.changes?.map(row => [row.ticker, formatWeight(row.current_weight), formatWeight(row.reference_weight), formatDisplayValue(row.weight_change_fraction, 'percentage_points')]) ?? []} />
-      {a && a.changes === null && <Table title="Known current allocation" headings={['Security', `Market value (${data.currency})`, 'Invested weight', 'Price status']} emptyMessage={a.current.valuation_complete ? 'No invested securities recorded at this cutoff.' : 'No current security rows supplied for this incomplete valuation.'} rows={a.current.securities.map(row => [row.ticker, formatOptionalCurrency(row.market_value, data.currency), formatWeight(row.weight), row.price_status])} />}
+      {a && a.changes === null && <Table columnRoles={['identity', 'number', 'number', 'status']} title="Known current allocation" headings={['Security', `Market value (${data.currency})`, 'Invested weight', 'Price status']} emptyMessage={a.current.valuation_complete ? 'No invested securities recorded at this cutoff.' : 'No current security rows supplied for this incomplete valuation.'} rows={a.current.securities.map(row => [row.ticker, formatOptionalCurrency(row.market_value, data.currency), formatWeight(row.weight), row.price_status])} />}
       <Table title="Current instrument classifications" headings={['Classification', `Market value (${data.currency})`, 'Invested weight', 'Holdings']}
         emptyMessage={a === null ? 'Allocation unavailable; see report diagnostics.' : a.current.valuation_complete && a.current.securities.length === 0 ? 'No invested securities to classify.' : 'No classification rows available; see allocation availability notes.'}
         rows={a?.current.classification_exposures.map(row => [row.classification, formatOptionalCurrency(row.market_value, data.currency), formatWeight(row.weight), row.holdings_count]) ?? []} />

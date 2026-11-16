@@ -15,6 +15,25 @@ after(async () => { globalThis.fetch = nativeFetch; await server?.close(); });
 const fixture = () => ({ portfolio_id: 7, name: 'Recorded <portfolio>', currency: 'GBP', trades: [{ id: 12, date: '2026-01-03', transaction_type: 'BUY', instrument_id: 2, ticker: 'ABC', instrument_name: 'Example', instrument_currency: 'EUR', quantity: 0.00000000001, price: 0.0000123456789, currency: 'EUR', source: '<script>source</script>', issues: [{ code: 'currency_mismatch', message: 'Recorded currency differs; no conversion.' }] }], external_cash_flows: [{ id: 8, date: '2026-01-02', flow_type: 'DEPOSIT', amount: 100.125, currency: 'GBP', source: 'fixture', issues: [] }] });
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status });
 
+test('ledger tables retain row identity, exact values and described scroll regions', () => {
+  const data = fixture(); data.trades[0].source = 'source_identifier_'.repeat(20);
+  data.trades[0].quantity = -1e-11;
+  const before = structuredClone(data);
+  const html = renderToStaticMarkup(createElement(page.TransactionsContent, { data }));
+  assert.match(html, /<caption class="sr-only">Recorded security trades/);
+  assert.match(html, /<caption class="sr-only">Recorded external cash flows/);
+  assert.equal((html.match(/<th scope="row" class="table-date">/g) ?? []).length, 2);
+  for (const role of ['table-identity', 'table-type', 'table-currency', 'table-metadata', 'recorded-number']) assert.ok(html.includes(`class="${role}"`));
+  const hints = [...html.matchAll(/<p id="([^"]+)" class="table-scroll-hint">If columns extend/g)];
+  assert.equal(hints.length, 2);
+  assert.notEqual(hints[0][1], hints[1][1]);
+  for (const [, id] of hints) assert.ok(html.includes(`aria-describedby="${id}"`));
+  assert.ok(html.includes(data.trades[0].source)); assert.ok(html.includes('-1e-11'));
+  assert.deepEqual(data, before);
+  data.trades = []; data.external_cash_flows = [];
+  assert.ok(!renderToStaticMarkup(createElement(page.TransactionsContent, { data })).includes('table-scroll-hint'));
+});
+
 test('runtime validation covers every nested field without assuming clean ledger data', () => {
   assert.equal(api.isTransactionsResponse(fixture()), true);
   const unusual = fixture(); unusual.trades[0].date = 'bad recorded date'; unusual.trades[0].ticker = null; unusual.trades[0].quantity = 0;
