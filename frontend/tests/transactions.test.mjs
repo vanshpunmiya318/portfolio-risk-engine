@@ -4,6 +4,7 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 let server, api, page;
 const nativeFetch = globalThis.fetch;
 before(async () => {
@@ -14,6 +15,25 @@ before(async () => {
 after(async () => { globalThis.fetch = nativeFetch; await server?.close(); });
 const fixture = () => ({ portfolio_id: 7, name: 'Recorded <portfolio>', currency: 'GBP', trades: [{ id: 12, date: '2026-01-03', transaction_type: 'BUY', instrument_id: 2, ticker: 'ABC', instrument_name: 'Example', instrument_currency: 'EUR', quantity: 0.00000000001, price: 0.0000123456789, currency: 'EUR', source: '<script>source</script>', issues: [{ code: 'currency_mismatch', message: 'Recorded currency differs; no conversion.' }] }], external_cash_flows: [{ id: 8, date: '2026-01-02', flow_type: 'DEPOSIT', amount: 100.125, currency: 'GBP', source: 'fixture', issues: [] }] });
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status });
+
+test('record context and row issues stay visible while ordering and valuation mechanics are expandable', () => {
+  const d = fixture();
+  d.trades[0].quantity = -1e-11;
+  d.trades.push({ ...structuredClone(d.trades[0]), id: 10, date: '2026-01-02', quantity: 0, price: 0, issues: [] });
+  d.external_cash_flows[0].amount = -100.125;
+  const before = structuredClone(d), json = JSON.stringify(d);
+  const html = renderToStaticMarkup(createElement(page.TransactionsContent, { data: d }));
+  const visible = withDetailsClosed(html);
+  for (const text of ['Historical ledger records, not live prices', 'not external contributions', 'deposits and withdrawals', 'execution prices are recorded trade values', 'not current split-adjusted holdings', 'recorded currency', 'no conversion', 'currency_mismatch', 'Recorded currency differs', 'GBP', 'EUR', 'Instrument 2', 'Row 12', 'Row 10', '-1e-11', '0.0000123456789', '-100.125', '&lt;script&gt;source&lt;/script&gt;']) assert.ok(visible.includes(text), text);
+  assert.ok(visible.indexOf('Row 12') < visible.indexOf('Row 10'), 'Keep the supplied transaction order');
+  assert.ok(visible.includes('<td class="recorded-number">0</td>'));
+  assert.match(html, /<details class="performance-methodology"><summary>About these records<\/summary>/);
+  const detail = html.split('<summary>About these records</summary>')[1].split('</details>')[0];
+  for (const text of ['Dates are recorded ledger dates', 'sorted by recorded date, then row ID, newest first', 'History does not require market prices or a successful valuation']) {
+    assert.ok(detail.includes(text), text); assert.ok(!visible.includes(text), text);
+  }
+  assert.deepEqual(d, before); assert.equal(JSON.stringify(d), json);
+});
 
 test('ledger tables retain row identity, exact values and described scroll regions', () => {
   const data = fixture(); data.trades[0].source = 'source_identifier_'.repeat(20);

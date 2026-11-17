@@ -43,7 +43,7 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
   const date = data.effective_valuation_date;
   const metrics = [
     { label: 'Invested market value', value: formatOptionalCurrency(data.totals.market_value, data.currency), note: 'Excludes uninvested cash' },
-    { label: 'Remaining cost basis', value: formatOptionalCurrency(data.totals.remaining_average_cost_basis, data.currency), note: 'Average-cost basis, not net investment' },
+    { label: 'Remaining cost basis', value: formatOptionalCurrency(data.totals.remaining_average_cost_basis, data.currency), note: 'Average-cost basis of open positions, not net transaction investment' },
     { label: 'Unrealized gain / loss', value: formatOptionalCurrency(data.totals.unrealized_gain_loss, data.currency), note: 'Open positions only', className: gainClass(data.totals.unrealized_gain_loss) },
     { label: 'Open holdings', value: String(data.totals.holding_count), note: `${data.totals.valued_holding_count} with usable valuations` },
   ];
@@ -63,7 +63,7 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
     {data.holdings.length === 0 ? <div className="summary-state holdings-empty" role="status"><h2>No open holdings</h2>
       <p>No invested positions were reported for this cutoff.</p><button className="summary-button" onClick={retry}>Check again</button></div> : <>
       <section className="holdings-panel holdings-table-panel" aria-labelledby="positions-title"><div className="panel-heading">
-        <h2 id="positions-title">Open positions</h2><span className="panel-caption">Values in {data.currency}, except explicitly labelled prices</span></div>
+        <h2 id="positions-title">Open positions</h2><span className="panel-caption">Values in {data.currency}, except explicitly labelled prices. Weights exclude cash.</span></div>
         <p className="price-details-hint">Open a price status for its observation date and age.</p>
         <TableScroll label="Holdings table">
           <table className="holdings-table positions-table"><caption className="sr-only">Historical holdings, including price freshness and currency status. Unavailable values are not zero.</caption>
@@ -86,7 +86,6 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
         </TableScroll></section>
       <AllocationDonut data={data} />
     </>}
-    <p className="valuation-note">Weights exclude cash. Remaining average-cost basis is the cost of open positions, not net transaction investment.
-      {' '}No currency conversions or missing-price estimates are made.</p>
+    <p className="valuation-note">No currency conversions or missing-price estimates are made.</p>
   </>;
 }

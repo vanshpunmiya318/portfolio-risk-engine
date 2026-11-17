@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { createPerformanceLoader, getPortfolioPerformance, isPerformanceResponse, performanceQuery, PerformanceRequestError } from '../src/api/performance.ts';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 
 const originalFetch = globalThis.fetch;
 after(() => { globalThis.fetch = originalFetch; });
@@ -141,5 +142,53 @@ test('Performance content exposes dates, null reasons, comparison units and live
     assert.ok(html.includes('<svg'), 'Valid portfolio growth survives missing benchmark data');
     const empty = missingBenchmark(); empty.valuations = []; empty.portfolio_intervals = []; empty.status = 'unavailable';
     assert.match(renderToStaticMarkup(createElement(PerformanceContent, { data: empty })), /No analysis observations/);
+  } finally { await server.close(); }
+});
+
+test('Performance keeps benchmark limits and single unavailable labels visible, with full calculation details accessible', async () => {
+  const { createServer } = await import('vite');
+  const { default: react } = await import('@vitejs/plugin-react');
+  const { createElement } = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, ws: false, watch: null } });
+  try {
+    const { PerformanceContent } = await server.ssrLoadModule('/src/pages/Performance.tsx');
+    const d = missingBenchmark();
+    d.metric_conventions.annualization_sessions = 250; d.metric_conventions.volatility_ddof = 2;
+    d.metric_conventions.risk_free_rate = .025; d.methodology.price_age_days = 3;
+    d.portfolio_metrics.cumulative_return.value = 0;
+    d.portfolio_metrics.annualized_return.value = -.02;
+    d.comparison.excess_cumulative_return.unavailable_reasons[0].message = 'Cumulative comparison reason.';
+    d.comparison.excess_annualized_return.unavailable_reasons[0].message = 'Annualized comparison reason.';
+    const before = structuredClone(d);
+    const html = renderToStaticMarkup(createElement(PerformanceContent, { data: d }));
+    const visible = withDetailsClosed(html);
+    const comparison = visible.split('aria-labelledby="performance-comparison"')[1].split('</section>')[0];
+    assert.match(comparison, /SPY benchmark methodology: raw-close price return, excluding dividends and dividend reinvestment/);
+    for (const [label, message] of [['Cumulative', 'Cumulative comparison reason.'], ['Annualized', 'Annualized comparison reason.']]) {
+      const group = comparison.split(`<dt>${label} return difference</dt>`)[1].split('</div>')[0];
+      assert.equal((group.match(/>Unavailable</g) ?? []).length, 1, label);
+      assert.equal((group.match(/<dd>/g) ?? []).length, 1, label);
+      assert.ok(group.includes(message)); assert.match(group, /insufficient_coverage/);
+    }
+    for (const text of ['Historical results, not today', 'Partial analysis', 'Verified benchmark coverage is unavailable.', 'maximum age 3 calendar days', 'No implicit currency conversion', '0.00%', '-2.00%', 'percentage points']) assert.ok(visible.includes(text), text);
+    assert.ok(html.includes('<td>1.1</td>'), 'Exact observations remain available in the chart disclosure');
+    const detail = html.split('<summary>Calculation details and calendar provenance</summary>')[1].split('</details>')[0];
+    for (const text of ['250 verified trading sessions', 'ddof 2', '2.50%', d.methodology.calendar_source, d.methodology.external_flow_timing, d.methodology.portfolio_price_basis]) {
+      assert.ok(detail.includes(text), text); assert.ok(!visible.includes(text), text);
+    }
+    assert.deepEqual(d, before);
+    const alternative = fixture(); alternative.benchmark_ticker = 'QQQ';
+    alternative.methodology.benchmark_return_basis = 'Supplied alternative benchmark price basis.';
+    const alternateHtml = renderToStaticMarkup(createElement(PerformanceContent, { data: alternative }));
+    assert.match(withDetailsClosed(alternateHtml), /QQQ benchmark methodology: Supplied alternative benchmark price basis/);
+    assert.match(alternateHtml, /Cash-flow-adjusted normalized wealth, including the initial baseline\. QQQ benchmark: Supplied alternative/);
+    assert.ok(!alternateHtml.includes('raw-close price return'));
+    for (const [value, text] of [[0, '0.00 percentage points'], [-.0397, '-3.97 percentage points'], [.025, '+2.50 percentage points']]) {
+      alternative.comparison.excess_cumulative_return.value = value;
+      const rendered = renderToStaticMarkup(createElement(PerformanceContent, { data: alternative }));
+      const group = rendered.split('<dt>Cumulative return difference</dt>')[1].split('</div>')[0];
+      assert.ok(group.includes(text)); assert.ok(!group.includes('Unavailable'));
+    }
   } finally { await server.close(); }
 });

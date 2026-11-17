@@ -18,8 +18,8 @@ export function differenceLabel(metric: MetricValue): string {
     minimumFractionDigits: 2, maximumFractionDigits: 2,
   }).format(metric.value * 100)} percentage points`;
 }
-function Metric({ metric }: { metric: MetricValue }) {
-  return <><span>{metricLabel(metric)}</span>{metric.value === null && <ul className="metric-reasons">
+function Metric({ metric, difference = false }: { metric: MetricValue; difference?: boolean }) {
+  return <><span>{difference ? differenceLabel(metric) : metricLabel(metric)}</span>{metric.value === null && <ul className="metric-reasons">
     {metric.unavailable_reasons.map((reason, index) => <li key={index}>{reason.message} <code>{reason.code}</code></li>)}
   </ul>}</>;
 }
@@ -84,6 +84,8 @@ function CoverageSummary({ label, coverage }: { label: string; coverage: Coverag
 }
 export function PerformanceContent({ data }: { data: PerformanceResponse }) {
   const p = data.period;
+  const benchmarkMethodology = data.methodology.benchmark_return_basis === 'raw_close_price_return; dividends_not_reinvested'
+    ? 'raw-close price return, excluding dividends and dividend reinvestment.' : data.methodology.benchmark_return_basis;
   const charts = performanceChartLines(data);
   const metrics = [
     ['cumulative_return', 'Cumulative return'], ['annualized_return', 'Annualized return'],
@@ -114,17 +116,16 @@ export function PerformanceContent({ data }: { data: PerformanceResponse }) {
     </div>)}</dl>
     <section className="holdings-panel" aria-labelledby="performance-comparison"><div className="panel-heading"><h2 id="performance-comparison">Benchmark comparison</h2>
       <span className="panel-caption">{data.comparison_eligible ? 'Matching verified intervals' : 'Comparison unavailable; see reasons below'}</span></div>
+      <p className="panel-caption">{data.benchmark_ticker} benchmark methodology: {benchmarkMethodology}</p>
       <dl className="performance-comparison">
-        <div><dt>Cumulative return difference</dt><dd>{differenceLabel(data.comparison.excess_cumulative_return)}</dd>
-          {data.comparison.excess_cumulative_return.value === null && <dd><Metric metric={data.comparison.excess_cumulative_return} /></dd>}</div>
-        <div><dt>Annualized return difference</dt><dd>{differenceLabel(data.comparison.excess_annualized_return)}</dd>
-          {data.comparison.excess_annualized_return.value === null && <dd><Metric metric={data.comparison.excess_annualized_return} /></dd>}</div>
+        <div><dt>Cumulative return difference</dt><dd><Metric metric={data.comparison.excess_cumulative_return} difference /></dd></div>
+        <div><dt>Annualized return difference</dt><dd><Metric metric={data.comparison.excess_annualized_return} difference /></dd></div>
         <div><dt>Portfolio Sharpe ratio</dt><dd><Metric metric={data.portfolio_metrics.sharpe_ratio} /></dd></div>
         <div><dt>{data.benchmark_ticker} Sharpe ratio</dt><dd><Metric metric={data.benchmark_metrics.sharpe_ratio} /></dd></div>
-      </dl><p className="panel-caption">Differences are portfolio minus benchmark, in percentage points. Sharpe is a ratio.</p>
+      </dl><p className="panel-caption">Returns display as percentages; differences are portfolio minus benchmark, in percentage points. Sharpe is a ratio.</p>
     </section>
     <div className="performance-charts" key={`${p.effective_baseline_date}/${p.effective_end_date}`}>
-      <TimeSeriesChart title="Portfolio growth" description="Cash-flow-adjusted normalized wealth, including the initial baseline. Benchmark uses raw-close price return, excluding dividends."
+      <TimeSeriesChart title="Portfolio growth" description={`Cash-flow-adjusted normalized wealth, including the initial baseline. ${data.benchmark_ticker} benchmark: ${benchmarkMethodology}`}
         lines={charts.growth} unit="wealth_index" start={p.effective_baseline_date} end={p.effective_end_date} />
       <TimeSeriesChart title="Portfolio drawdown" description="Loss from the running wealth peak, including the initial baseline. Derived only from complete verified normalized wealth."
         lines={charts.drawdown} unit="fraction" start={p.effective_baseline_date} end={p.effective_end_date} compact />
@@ -132,12 +133,10 @@ export function PerformanceContent({ data }: { data: PerformanceResponse }) {
     <section className="holdings-panel" aria-labelledby="analysis-coverage"><h2 id="analysis-coverage">Coverage and methodology</h2>
       <dl className="performance-coverage"><CoverageSummary label="Portfolio" coverage={data.portfolio_coverage} />
         <CoverageSummary label={data.benchmark_ticker} coverage={data.benchmark_coverage} /></dl>
-      <p className="valuation-note">Returns are decimal fractions displayed as percentages. Annualization uses {data.metric_conventions.annualization_sessions} verified trading sessions per year;
-        volatility uses sample standard deviation (ddof {data.metric_conventions.volatility_ddof}). Risk-free rate: {formatWeight(data.metric_conventions.risk_free_rate)}.</p>
-      <p className="valuation-note">{data.benchmark_ticker} benchmark methodology: {data.methodology.benchmark_return_basis === 'raw_close_price_return; dividends_not_reinvested'
-        ? 'raw-close price return, excluding dividends and dividend reinvestment.' : data.methodology.benchmark_return_basis}
-        {' '}Exact-date price policy: maximum age {data.methodology.price_age_days} calendar days. No implicit currency conversion.</p>
-      <details className="performance-methodology"><summary>Calculation details and calendar provenance</summary><dl>
+      <p className="valuation-note">Exact-date price policy: maximum age {data.methodology.price_age_days} calendar days. No implicit currency conversion.</p>
+      <details className="performance-methodology"><summary>Calculation details and calendar provenance</summary>
+        <p>Returns are decimal fractions displayed as percentages. Annualization uses {data.metric_conventions.annualization_sessions} verified trading sessions per year;
+          volatility uses sample standard deviation (ddof {data.metric_conventions.volatility_ddof}). Risk-free rate: {formatWeight(data.metric_conventions.risk_free_rate)}.</p><dl>
         <div><dt>Cash-flow timing</dt><dd>{data.methodology.external_flow_timing}</dd></div>
         <div><dt>Portfolio price basis</dt><dd>{data.methodology.portfolio_price_basis}</dd></div>
         <div><dt>Calendar provenance</dt><dd>{data.methodology.calendar_source ?? 'Unavailable'}</dd></div></dl></details>

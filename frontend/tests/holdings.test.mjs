@@ -4,6 +4,7 @@ import { test, after } from 'node:test';
 import { getPortfolioSummary, getPortfolioHoldings } from '../src/api/portfolio.ts';
 import { buildAllocation } from '../src/lib/allocation.ts';
 import { formatDisplayValue, formatOptionalCurrency, formatQuantity, formatValuationDate, formatWeight } from '../src/lib/format.ts';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 
 const nativeFetch = globalThis.fetch;
 after(() => { globalThis.fetch = nativeFetch; });
@@ -170,6 +171,35 @@ test('rendered content exposes incomplete valuation, foreign price currency and 
     assert.match(complete, /role="region" tabindex="0"/);
     const empty = fixture(); empty.holdings = []; empty.totals.holding_count = 0;
     assert.match(renderToStaticMarkup(createElement(HoldingsContent, { data: empty, retry() {} })), /No open holdings/);
+  } finally { await server.close(); }
+});
+
+test('Holdings retains visible valuation limits and local definitions without repeating the cost-basis footer', async () => {
+  const { createServer } = await import('vite');
+  const { default: react } = await import('@vitejs/plugin-react');
+  const { createElement } = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, ws: false, watch: null } });
+  try {
+    const { HoldingsContent } = await server.ssrLoadModule('/src/pages/Holdings.tsx');
+    const d = fixture(); d.max_price_age_days = 3; d.valuation_complete = false;
+    d.holdings[0].quantity = .1 + .2;
+    Object.assign(d.holdings[0], { market_price: null, market_value: null, unrealized_gain_loss: null, effective_price_date: null, price_age_days: null, price_status: 'missing', market_price_currency: 'EUR', currency_status: 'conflict' });
+    d.holdings[1].quantity = 1e-11; d.holdings[1].unrealized_gain_loss = -12.34;
+    d.holdings.forEach(h => { h.invested_weight = null; });
+    d.totals.market_value = null; d.totals.unrealized_gain_loss = null;
+    d.warnings = [{ code: 'corporate_action_coverage', message: 'Corporate-action coverage incomplete.', ticker: 'ONE' }];
+    const before = structuredClone(d);
+    const html = renderToStaticMarkup(createElement(HoldingsContent, { data: d, retry() {} }));
+    const visible = withDetailsClosed(html);
+    for (const text of ['Historical valuation cutoff', '5 January 2026', 'not today', 'Maximum price age: 3 calendar days', 'Missing price', 'Currency conflict', 'EUR', 'corporate_action_coverage', 'Corporate-action coverage incomplete.', 'Incomplete valuation', 'Unavailable', 'Excludes uninvested cash', 'Weights exclude cash', 'Excludes cash', 'No currency conversions or missing-price estimates', '≈0.3', '1E-11', '12.34']) assert.ok(visible.includes(text), text);
+    const costMetric = visible.split('<dt>Remaining cost basis</dt>')[1].split('</div>')[0];
+    assert.match(costMetric, /Average-cost basis of open positions, not net transaction investment/);
+    assert.equal(visible.split('not net transaction investment').length - 1, 1);
+    assert.ok(html.includes('Supplied quantity: 0.30000000000000004'));
+    assert.ok(!visible.includes('Supplied quantity: 0.30000000000000004'));
+    assert.match(html, /class="price-status price-missing"/);
+    assert.deepEqual(d, before);
   } finally { await server.close(); }
 });
 
