@@ -6,6 +6,7 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 let server, api, page, comparison, bars, AllocationComparisonChart;
 const originalFetch = globalThis.fetch;
 before(async () => {
@@ -45,6 +46,21 @@ function fixture() {
 }
 const response = data => new Response(JSON.stringify(data));
 const signal = () => new AbortController().signal;
+
+test('reference meaning and missing data stay visible while reconstruction mechanics are expandable', () => {
+  const d = fixture(); d.reference.reference_date = '2026-01-02';
+  d.reference.unavailable_reasons = [issue()];
+  const before = structuredClone(d);
+  const html = renderToStaticMarkup(createElement(page.AllocationContent, { data: d }));
+  const visible = withDetailsClosed(html);
+  for (const text of ['Compared with the historical starting allocation, not an investment-policy target.', '2 January 2026', 'Reconstructed at the end of the first recorded buy date', 'Exact-date valuation unavailable.', 'Historical reference unavailable or incomplete', 'incomplete_valuation', 'excluding cash']) assert.ok(visible.includes(text), text);
+  assert.ok(!visible.includes('Missing prices do not advance'));
+  assert.ok(html.includes('Missing prices do not advance the reference date'));
+  assert.ok(html.includes('recorded transactions and stored exact-date prices'));
+  assert.match(html, /<details[^>]*><summary>How the historical reference is reconstructed/);
+  assert.match(html, /aria-describedby="allocation-reference-meaning"/);
+  assert.deepEqual(d, before);
+});
 test('Allocation client encodes exact cutoff, validates portfolio identity and retains values', async () => {
   const d = fixture(); d.requested_valuation_date = '2026-01-09';
   globalThis.fetch = async (url, options) => {

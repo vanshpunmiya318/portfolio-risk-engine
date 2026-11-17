@@ -6,6 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 let server, api, page, charts;
 const nativeFetch = globalThis.fetch;
 before(async () => {
@@ -95,7 +96,7 @@ test('Risk page preserves Apply-only controls, dates, negative estimates and rat
   assert.equal(page.riskMetricLabel(metric(.8, 'ratio')), '0.80'); assert.equal(page.riskMetricLabel(metric(null)), 'Unavailable');
   const d = fixture(); d.period.requested_start_date = '2026-01-04';
   const html = renderToStaticMarkup(createElement(page.RiskContent, { data: d }));
-  for (const text of ['4 January 2026', '5 January 2026', 'requested and effective dates differ', 'not guaranteed loss limits', 'raw-close price returns excluding dividends', 'Historical drawdown', '2 observations']) assert.ok(html.includes(text), text);
+  for (const text of ['4 January 2026', '5 January 2026', 'requested and effective dates differ', 'Actual losses can exceed these estimates', 'raw-close price returns excluding dividends', 'Historical drawdown', '2 observations']) assert.ok(html.includes(text), text);
   assert.ok(!html.includes('<svg'), 'Incomplete chart windows are withheld');
   d.valuations = []; d.portfolio_intervals = []; d.status = 'unavailable';
   assert.match(renderToStaticMarkup(createElement(page.RiskContent, { data: d })), /No risk observations/);
@@ -207,6 +208,24 @@ test('plain-language metric explanations retain confidence, horizon, benchmark a
   d.portfolio_metrics.historical_var = metric(-.0125); d.portfolio_metrics.beta = metric(null, 'ratio');
   const before = structuredClone(d);
   const html = renderToStaticMarkup(createElement(page.RiskContent, { data: d }));
-  for (const text of ['How widely historical session returns varied', 'This is not a forecast', 'Historical sensitivity to SPY', 'not the same return', 'one-session loss at 99.00% confidence', 'Losses can exceed this estimate', 'fractional tail weights', 'horizon is one trading session', '2.50% annual risk-free rate', 'A ratio, not a percentage', 'Largest historical fall from a running peak', 'including the baseline', '-1.25%', 'Unavailable']) assert.ok(html.includes(text), text);
+  for (const text of ['How widely historical session returns varied', 'This is not a forecast', 'Historical sensitivity to SPY', 'not the same return', 'historical one-session estimates at 99.00% confidence', 'Actual losses can exceed these estimates', '2.50% annual risk-free rate', 'A ratio, not a percentage', 'Largest historical fall from a running peak', 'including the baseline', '-1.25%', 'Unavailable']) assert.ok(withDetailsClosed(html).includes(text), text);
+  assert.deepEqual(d, before);
+});
+
+test('risk calculation details are retained without burying missing reasons or duplicating the horizon', () => {
+  const d = fixture(); d.benchmark_ticker = 'QQQ'; d.metric_conventions.annualization_sessions = 250;
+  d.metric_conventions.risk_free_rate = .025; d.confidence = .99;
+  d.methodology.benchmark_return_basis = 'Supplied alternate methodology';
+  d.portfolio_metrics.beta = metric(null, 'ratio'); d.portfolio_metrics.annualized_volatility = metric(0);
+  const before = structuredClone(d);
+  const html = renderToStaticMarkup(createElement(page.RiskContent, { data: d }));
+  const visible = withDetailsClosed(html);
+  for (const text of ['QQQ', '99.00%', '2.50% annual risk-free rate', 'Supplied alternate methodology', 'Benchmark coverage unavailable.', 'missing_benchmark', '0.00%', '-1.00%']) assert.ok(visible.includes(text), text);
+  assert.equal(visible.split('historical one-session estimates').length - 1, 1);
+  for (const text of ['Annualization uses 250 sessions', 'Sample volatility uses ddof 1', 'fractional tail weights']) {
+    assert.ok(html.includes(text), text); assert.ok(!visible.includes(text), text);
+  }
+  assert.ok(html.includes(d.metric_conventions.cvar_method));
+  assert.ok(html.includes(d.methodology.external_flow_timing));
   assert.deepEqual(d, before);
 });

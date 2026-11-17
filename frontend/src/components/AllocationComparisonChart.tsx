@@ -4,14 +4,14 @@ import { allocationBars, exactAllocationChange, exactAllocationPercent } from '.
 import { formatAllocationChange } from '../lib/allocationComparison';
 import { formatWeight } from '../lib/format';
 
-export function AllocationComparisonChart({ data }: { data: AllocationResponse }) {
+export function AllocationComparisonChart({ data, referenceDescriptionId }: { data: AllocationResponse; referenceDescriptionId?: string }) {
   const id = useId();
   const [selected, setSelected] = useState<string | null>(null);
   const chart = allocationBars(data);
   const active = chart.rows.find(row => row.ticker === selected);
-  return <section className="holdings-panel allocation-bars" aria-labelledby={`${id}-title`}>
+  return <section className="holdings-panel allocation-bars" aria-labelledby={`${id}-title`} aria-describedby={referenceDescriptionId}>
     <div className="panel-heading"><h2 id={`${id}-title`}>Current versus historical starting allocation</h2><span className="panel-caption">Invested holdings excluding cash</span></div>
-    <p className="valuation-note">Change from the recorded historical starting allocation, not investment-policy targets or required rebalancing. Both series use the same 0–100% scale. Securities are ordered by descending current weight, then ticker.</p>
+    <p className="valuation-note">Both series use the same 0–100% scale. Securities are ordered by descending current weight, then ticker.</p>
     {chart.reasons.length > 0 ? <div className="allocation-unavailable" role="status"><strong>Allocation comparison chart unavailable</strong><ul>{chart.reasons.map((reason, i) => <li key={i}>{reason}</li>)}</ul></div> : <>
       <ul className="allocation-bars-legend" aria-label="Allocation chart legend"><li><span className="bar-key bar-key-start" aria-hidden="true" />Historical starting</li><li><span className="bar-key bar-key-current" aria-hidden="true" />Current invested</li></ul>
       <p className="panel-caption" id={`${id}-help`}>Tab to a security; press Enter or Space to show exact values. The comparison table above provides the same data with full column labels.</p>

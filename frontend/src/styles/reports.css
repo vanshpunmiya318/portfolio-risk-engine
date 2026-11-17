@@ -5,8 +5,7 @@
 .report-actions .summary-button { margin-top: 0; }
 .report-filters input[type="text"] { width: 9rem; }
 .report-notes { margin-top: var(--space-2); font-size: .75rem; font-weight: 400; color: var(--color-text-muted); white-space: normal; overflow-wrap: anywhere; }
-.report-notes summary { cursor: pointer; padding: var(--space-2) 0; }
-.report-notes ul { padding-left: var(--space-4); max-height: 22rem; overflow-y: auto; }
+.report-notes ul { padding-left: var(--space-4); }
 .report-notes li + li { margin-top: var(--space-3); }
 .report-notes code { overflow-wrap: anywhere; }
 .report-table .table-identity { min-width: 8rem; }

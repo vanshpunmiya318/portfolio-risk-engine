@@ -18,14 +18,21 @@ function Metric({ value, difference = false }: { value: MetricValue; difference?
   return <>{reportMetricLabel(value, difference)}
     {value.value === null && <Notes items={value.unavailable_reasons} />}</>;
 }
-type Note = { code: string; message: string; scope?: string; ticker?: string | null; metric?: string | null; start_date?: string | null; end_date?: string | null };
-function Notes({ items }: { items: readonly Note[] }) {
-  const unique = [...new Map(items.map(item => [JSON.stringify(item), item])).values()];
+type Note = { code: string; message: string; category?: string; scope?: string; ticker?: string | null; metric?: string | null; start_date?: string | null; end_date?: string | null };
+// Current diagnostic contracts have flat JSON fields. Compare every supplied field,
+// with keys sorted lexically so object-property order cannot change identity.
+// Missing fields and explicit nulls remain distinct; message text alone is never a key.
+const noteKey = (item: Note) => JSON.stringify(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+function Notes({ items, label = 'Availability notes', affectedSections }: {
+  items: readonly Note[]; label?: string; affectedSections?: ReadonlyMap<string, readonly string[]>;
+}) {
+  const unique = [...new Map(items.map(item => [noteKey(item), item])).values()];
   const informational = unique.every(item => ['not_applicable', 'investment_policy_unavailable'].includes(item.code));
   if (!unique.length) return null;
-  return <details className={`report-notes ${informational ? 'report-information' : ''}`}><summary>{unique.length} availability {unique.length === 1 ? 'note' : 'notes'}</summary>
-    <ul>{unique.map((item, i) => <li key={i}><strong>{item.scope}{item.ticker ? ` · ${item.ticker}` : ''}{item.metric ? ` · ${item.metric}` : ''}</strong>{' '}
-      {item.message} <code>{item.code}</code>{item.start_date || item.end_date ? <span> ({date(item.start_date ?? null)} – {date(item.end_date ?? null)})</span> : <small className="cell-note">Date not supplied; see section cutoff.</small>}</li>)}</ul></details>;
+  return <div className={`report-notes ${informational ? 'report-information' : ''}`}>
+    <ul aria-label={label}>{unique.map((item, i) => <li key={i}><strong>{item.scope}{item.ticker ? ` · ${item.ticker}` : ''}{item.metric ? ` · ${item.metric}` : ''}</strong>{' '}
+      {item.message} <code>{item.code}</code>{item.start_date || item.end_date ? <span> ({date(item.start_date ?? null)} – {date(item.end_date ?? null)})</span> : <small className="cell-note">Date not supplied; see section cutoff.</small>}
+      {affectedSections?.has(noteKey(item)) && <span className="cell-note">Affects: {affectedSections.get(noteKey(item))!.join(', ')}</span>}</li>)}</ul></div>;
 }
 function ObservationCounts({ rows }: { rows: { label: string; counts: string }[] }) {
   return <details className="report-observations"><summary>Observation counts by metric</summary><dl className="report-definitions">
@@ -57,6 +64,38 @@ function CoverageSummary({ label, coverage }: { label: string; coverage: Coverag
 
 export function ReportContent({ data }: { data: ReportResponse }) {
   const a = data.allocation, h = data.holdings, p = data.period;
+  const metricReasons = (section: 'performance' | 'risk') => [
+    ...Object.values(data[section].portfolio_metrics), ...Object.values(data[section].benchmark_metrics),
+    ...(section === 'performance' ? Object.values(data.performance.comparison) : []),
+  ].flatMap(value => value.value === null ? value.unavailable_reasons : []);
+  const performanceReasons = metricReasons('performance'), riskReasons = metricReasons('risk');
+  const allocationNotes = a ? [...a.current.unavailable_reasons, ...a.reference.unavailable_reasons,
+    ...(a.reference.snapshot?.unavailable_reasons ?? []), ...a.comparison_unavailable_reasons,
+    ...a.target_unavailable_reasons, ...a.warnings] : [];
+  const remainingNotes = (items: readonly Note[], alreadyShown: readonly Note[]) => {
+    const shown = new Set(alreadyShown.map(noteKey));
+    return items.filter(item => !shown.has(noteKey(item)));
+  };
+  const performanceNotes = remainingNotes([...data.performance.warnings, ...data.performance.unavailable_reasons], performanceReasons);
+  const riskNotes = remainingNotes([...data.risk.warnings, ...data.risk.unavailable_reasons], riskReasons);
+  // Preserve API order within each source: Performance warnings/reasons first,
+  // then Risk warnings/reasons. Notes retains the first position for each identity.
+  // Track all source memberships, including diagnostics also explained at a figure.
+  const affectedSections = new Map<string, string[]>();
+  for (const section of ['performance', 'risk'] as const) {
+    for (const item of [...data[section].warnings, ...data[section].unavailable_reasons]) {
+      const key = noteKey(item), label = section === 'performance' ? 'Performance' : 'Risk';
+      const labels = affectedSections.get(key) ?? [];
+      if (!labels.includes(label)) labels.push(label);
+      affectedSections.set(key, labels);
+    }
+  }
+  const analysisNotes = [...performanceNotes, ...riskNotes];
+  const coverageNotes = remainingNotes([...data.warnings, ...data.unavailable_reasons], [
+    ...amountNames.flatMap(([key]) => data.endpoint[key].unavailable_reasons),
+    ...performanceReasons, ...riskReasons, ...analysisNotes,
+    ...(h?.warnings ?? []), ...allocationNotes,
+  ]);
   const datesDiffer = (p.requested_start_date !== null && p.requested_start_date !== p.selected_start_date) ||
     (p.requested_end_date !== null && p.requested_end_date !== p.selected_end_date) ||
     p.selected_start_date !== p.effective_baseline_date || p.selected_end_date !== p.effective_end_date ||
@@ -101,6 +140,10 @@ export function ReportContent({ data }: { data: ReportResponse }) {
       })}
       <Table title="Benchmark comparison" headings={['Metric', 'Value']} rows={Object.entries(data.performance.comparison).map(([key, value]) => [key === 'excess_cumulative_return' ? 'Cumulative return difference' : 'Annualized return difference', <Metric value={value} difference />])}
         metadata={<ObservationCounts rows={Object.entries(data.performance.comparison).map(([key, value]) => ({ label: key === 'excess_cumulative_return' ? 'Cumulative return difference' : 'Annualized return difference', counts: `${value.observations} observations` }))} />} />
+      {analysisNotes.length > 0 && <section aria-labelledby="report-analysis-diagnostics-title">
+        <h3 id="report-analysis-diagnostics-title">Performance and risk diagnostics</h3>
+        <Notes label="Performance and risk diagnostics" items={analysisNotes} affectedSections={affectedSections} />
+      </section>}
       <p className="valuation-note">Fractions display as percentages; defined return differences display in percentage points (pp). Ratios retain ratio units. Drawdown and VaR/CVaR signs follow backend conventions; negative tail estimates are not clamped.</p>
     </section>
     <section id="report-holdings" className="report-section" aria-labelledby="report-holdings-title" tabIndex={-1}>
@@ -123,15 +166,18 @@ export function ReportContent({ data }: { data: ReportResponse }) {
       <Table title="Current instrument classifications" headings={['Classification', `Market value (${data.currency})`, 'Invested weight', 'Holdings']}
         emptyMessage={a === null ? 'Allocation unavailable; see report diagnostics.' : a.current.valuation_complete && a.current.securities.length === 0 ? 'No invested securities to classify.' : 'No classification rows available; see allocation availability notes.'}
         rows={a?.current.classification_exposures.map(row => [row.classification, formatOptionalCurrency(row.market_value, data.currency), formatWeight(row.weight), row.holdings_count]) ?? []} />
-      <p className="valuation-note">Allocation weights exclude cash. Historical starting allocation is reconstructed at the end of the first recorded buy date; it is not an investment-policy target or rebalancing recommendation. Instrument classifications are not ETF look-through exposures.</p>
-      {a && <><p className="valuation-note">Reference date: {date(a.reference.reference_date)}. Reference invested value: {formatOptionalCurrency(a.reference.snapshot?.invested_value ?? null, data.currency)}.</p><Notes items={[...a.current.unavailable_reasons, ...a.reference.unavailable_reasons, ...(a.reference.snapshot?.unavailable_reasons ?? []), ...a.comparison_unavailable_reasons, ...a.target_unavailable_reasons, ...a.warnings]} /></>}
+      <p className="valuation-note">Allocation weights exclude cash. Historical starting allocation is reconstructed at the end of the first recorded buy date; it is not an investment-policy target or rebalancing recommendation. Classifications are current instrument metadata, not ETF look-through exposures, underlying-security overlap or historically versioned classifications.</p>
+      {a && <><p className="valuation-note">Reference date: {date(a.reference.reference_date)}. Reference invested value: {formatOptionalCurrency(a.reference.snapshot?.invested_value ?? null, data.currency)}.</p><Notes items={allocationNotes} /></>}
     </section>
     <section id="report-coverage" className="holdings-panel report-panel report-section" aria-labelledby="report-coverage-title" tabIndex={-1}><h2 id="report-coverage-title">Coverage and availability</h2><dl className="performance-coverage"><CoverageSummary label="Portfolio" coverage={data.performance.portfolio_coverage} /><CoverageSummary label={`Benchmark ${data.performance.benchmark_ticker}`} coverage={data.performance.benchmark_coverage} /></dl>
-      <Notes items={[...data.warnings, ...data.unavailable_reasons, ...data.performance.warnings, ...data.performance.unavailable_reasons, ...data.risk.warnings, ...data.risk.unavailable_reasons]} />
+      <Notes items={coverageNotes} />
       <p className="valuation-note">Observation arrays are retained in preview JSON. They are summarized here rather than printed individually.</p></section>
     <section id="report-methodology" className="holdings-panel report-panel report-section" aria-labelledby="report-methodology-title" tabIndex={-1}><h2 id="report-methodology-title">Methodology and provenance</h2>
-      <p className="valuation-note">Benchmark uses raw-close price returns, excluding dividend reinvestment. No implicit FX conversion. Cash flows use the backend's documented end-of-period convention. These are historical estimates, not predictions.</p>
-      <p className="valuation-note">Corporate-action validation is source-dependent: active holdings valued with Tiingo raw closes require continuous stored Tiingo coverage from first portfolio trade through cutoff. Other sources use adjusted close and do not receive the same Tiingo coverage check. Complete price coverage and latest price dates do not establish corporate-action coverage.</p>
+      <p className="valuation-note">{data.performance.benchmark_ticker} benchmark: {data.performance.methodology.benchmark_return_basis === 'raw_close_price_return; dividends_not_reinvested' ? 'raw-close price returns, excluding dividends and dividend reinvestment.' : data.performance.methodology.benchmark_return_basis} No implicit FX conversion. Cash flows use the backend's documented end-of-period convention. These are historical estimates, not predictions.</p>
+      <p className="valuation-note">Corporate-action checks depend on the price source; complete price coverage alone does not establish corporate-action coverage.</p>
+      <details className="performance-methodology"><summary>Corporate-action coverage by price source</summary>
+        <p>Active holdings valued with Tiingo raw closes require continuous stored Tiingo coverage from first portfolio trade through cutoff. Other sources use adjusted close and do not receive the same Tiingo coverage check. Complete price coverage and latest price dates do not establish corporate-action coverage.</p>
+      </details>
       <p className="valuation-note">Dataset origin is not provided by this report; no real-account or simulated-account claim is inferred. Legacy Attribution is excluded.</p>
       {(['performance', 'risk'] as const).map(section => <details className="performance-methodology" key={section}><summary>{section === 'performance' ? 'Performance' : 'Risk'} calculation conventions</summary><dl className="report-definitions">{Object.entries({ ...data[section].methodology, ...data[section].metric_conventions }).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{String(value ?? 'Unavailable')}</dd></div>)}</dl></details>)}
       <details className="performance-methodology"><summary>Report provenance and reproducibility</summary><dl className="report-definitions">{Object.entries(data.provenance).map(([key, value]) => <div key={key}><dt>{key.replaceAll('_', ' ')}</dt><dd>{key === 'persisted_snapshot_id' && value === null ? 'None (no persisted snapshot)' : Array.isArray(value) ? value.join(', ') || 'None recorded' : String(value ?? 'Unavailable')}</dd></div>)}</dl></details>
@@ -201,7 +247,7 @@ export function Reports({ portfolioId = 1 }: { portfolioId?: number }) {
       <p className="valuation-note">Applied selection: {applied.start_date ?? 'Automatic history start'} – {applied.end_date ?? 'Automatic history end'} · {applied.benchmark} · {formatWeight(applied.confidence)} confidence.</p>
       <div className="report-actions"><button className="summary-button" disabled={!artifact} onClick={downloadJson}>Download preview JSON</button>
         <button className="summary-button" disabled={!artifact || markdown.status === 'loading'} onClick={downloadMarkdown}>{markdown.status === 'loading' ? 'Generating fresh Markdown…' : 'Generate fresh Markdown'}</button></div>
-      <p className="valuation-note">JSON downloads the exact retained preview response without another request. Markdown is freshly generated from the applied parameters and may differ if stored data changed. Automatic boundaries may resolve to newer dates.</p>
+      <p className="valuation-note">JSON saves this preview exactly, without another request. Markdown is generated afresh from the applied parameters and may differ if stored data or automatic date boundaries change.</p>
       {markdown.status === 'loading' && <p role="status" className="valuation-note">Generating a fresh Markdown report. Preview JSON remains available.</p>}
       {markdown.status === 'error' && <p role="alert" className="filter-error">{markdown.message} The preview and JSON download remain available. Use Generate fresh Markdown to retry.</p>}
       {jsonError && <p role="alert" className="filter-error">{jsonError}</p>}

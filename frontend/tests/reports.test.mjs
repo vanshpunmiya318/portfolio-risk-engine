@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { execFileSync } from 'node:child_process';
+import { withDetailsClosed } from './helpers/closed-details.mjs';
 
 let server, api, page, downloads, fixtures;
 const nativeFetch = globalThis.fetch;
@@ -20,10 +21,10 @@ from riskengine.risk.report_service import get_report_response
 c=sqlite3.connect(Path('../data/historical_portfolio.db').resolve().as_uri()+'?mode=ro',uri=True)
 c.execute('BEGIN')
 out={}
-for name,start,end,benchmark in [('healthy','2026-10-23','2026-11-06','SPY'),('full','2024-01-02','2026-11-06','SPY'),('missing','2026-10-23','2026-11-06','ABSENT'),('weekend','2026-10-24','2026-11-07','SPY')]:
+for name,start,end,benchmark in [('healthy','2026-10-23','2026-11-06','SPY'),('full','2024-01-02','2026-11-06','SPY'),('missing','2026-10-23','2026-11-06','ABSENT'),('weekend','2026-10-24','2026-11-07','SPY'),('fullMissing',None,None,'ABSENT')]:
  out[name]=get_report_response(c,1,start,end,benchmark).model_dump(mode='json')
 c.close()
-print(json.dumps(out))`], { encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024 }));
+print(json.dumps(out))`], { encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024 }));
 });
 after(async () => { globalThis.fetch = nativeFetch; await server?.close(); });
 const clone = () => structuredClone(fixtures.healthy);
@@ -45,6 +46,121 @@ test('report tables distinguish numbers from status text and describe each scrol
 });
 const respond = (data, status = 200) => new Response(typeof data === 'string' ? data : JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const artifact = (report = clone()) => ({ id: 1, query: { ...query }, report, jsonText: JSON.stringify(report, null, 2) + '\n' });
+
+const analysisListItems = html => {
+  const list = html.match(/<ul aria-label="Performance and risk diagnostics">([\s\S]*?)<\/ul>/);
+  assert.ok(list, 'One visible consolidated analysis list must exist');
+  assert.equal((html.match(/<ul aria-label="Performance and risk diagnostics">/g) ?? []).length, 1);
+  return [...list[1].matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map(match => match[1]);
+};
+
+test('shared analysis diagnostics render once without merging distinct identities or losing source sections', () => {
+  const d = clone();
+  const shared = { code: 'source_gap', message: 'Repeated warning text.', category: 'coverage', scope: 'benchmark', ticker: null, metric: null, start_date: '2026-10-23', end_date: '2026-11-06' };
+  const missingTicker = { ...shared }; delete missingTicker.ticker;
+  const variants = [
+    { ...shared, start_date: '2026-10-22' }, { ...shared, end_date: '2026-11-05' },
+    { ...shared, scope: 'portfolio' }, { ...shared, code: 'different_code' },
+    { ...shared, ticker: 'QQQ' }, { ...shared, metric: 'benchmark.beta' },
+    { ...shared, category: 'methodology' }, missingTicker,
+  ];
+  const performanceOnly = { ...shared, message: 'Performance-only warning.' };
+  const riskOnly = { ...shared, message: 'Risk-only warning.' };
+  const metricReason = { ...shared, message: 'Reason beside historical VaR.', scope: 'portfolio', metric: 'portfolio.historical_var' };
+  d.risk.portfolio_metrics.historical_var.value = null;
+  d.risk.portfolio_metrics.historical_var.unavailable_reasons = [metricReason];
+  d.performance.warnings = [shared, ...variants, performanceOnly, metricReason];
+  // Reordering object properties does not create a different diagnostic.
+  d.risk.warnings = [Object.fromEntries(Object.entries(shared).reverse()), riskOnly, metricReason];
+  d.performance.unavailable_reasons = []; d.risk.unavailable_reasons = [];
+  d.warnings = [shared, ...variants, performanceOnly, riskOnly, metricReason];
+  const before = structuredClone(d);
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  const visible = withDetailsClosed(html), items = analysisListItems(visible);
+  assert.equal(items.length, 1 + variants.length + 3, 'Every distinct identity must survive');
+  assert.equal(items.filter(item => item.includes('Repeated warning text.')).length, 1 + variants.length);
+  assert.match(items[0], /Affects: Performance, Risk/);
+  assert.match(items.at(-3), /Performance-only warning/);
+  assert.match(items.at(-3), /Affects: Performance<\/span>/);
+  assert.match(items.at(-2), /Reason beside historical VaR/);
+  assert.match(items.at(-2), /Affects: Performance, Risk/);
+  assert.match(items.at(-1), /Risk-only warning/);
+  assert.match(items.at(-1), /Affects: Risk<\/span>/);
+  const riskTable = visible.split('<caption class="sr-only">Risk summary</caption>')[1].split('</table>')[0];
+  const rows = [...riskTable.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(match => match[1]);
+  const varRow = rows.find(row => row.includes('>One-session historical VaR</th>'));
+  const portfolioCell = varRow.match(/<td[^>]*>([\s\S]*?)<\/td>/)[1];
+  assert.match(portfolioCell, /Unavailable/); assert.match(portfolioCell, /Reason beside historical VaR/);
+  assert.ok(!rows.find(row => row.includes('>Beta versus selected benchmark</th>')).includes('Reason beside historical VaR'));
+  assert.deepEqual(d, before);
+});
+
+test('full-history ABSENT warnings appear once in API order with every original date and scope retained', () => {
+  const d = fixtures.fullMissing, before = structuredClone(d);
+  const identity = item => JSON.stringify(Object.fromEntries(Object.entries(item).sort()));
+  assert.deepEqual(new Set(d.performance.warnings.map(identity)), new Set(d.risk.warnings.map(identity)));
+  assert.ok(d.performance.warnings.length > 1000, 'Exercise the real full-history warning volume');
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  const visible = withDetailsClosed(html), items = analysisListItems(visible);
+  assert.equal(items.length, new Set(d.performance.warnings.map(identity)).size);
+  const escaped = value => renderToStaticMarkup(createElement('span', null, value)).slice(6, -7);
+  const day = value => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00Z`));
+  for (const [index, diagnostic] of d.performance.warnings.entries()) {
+    const item = items[index];
+    for (const field of ['message', 'scope', 'ticker', 'metric']) if (diagnostic[field]) assert.ok(item.includes(escaped(diagnostic[field])), `${index}: ${field}`);
+    assert.ok(item.includes(`<code>${escaped(diagnostic.code)}</code>`));
+    for (const field of ['start_date', 'end_date']) if (diagnostic[field]) assert.ok(item.includes(day(diagnostic[field])), `${index}: ${field}`);
+    assert.match(item, /Affects: Performance, Risk/);
+  }
+  assert.ok(!html.includes('aria-label="Performance availability notes"'));
+  assert.ok(!html.includes('aria-label="Risk availability notes"'));
+  assert.deepEqual(d, before);
+});
+
+test('closed-disclosure checks exclude nested content but retain summaries and surrounding reasons', () => {
+  const html = '<p>Visible reason</p><details open=""><summary>More</summary><p>Hidden</p><details><summary>Nested</summary>Secret</details></details><p>After</p>';
+  assert.equal(withDetailsClosed(html), '<p>Visible reason</p><details><summary>More</summary></details><p>After</p>');
+});
+
+test('report reasons and warnings stay visible in context with every disclosure closed', () => {
+  const d = clone();
+  const note = (message, metric = 'historical_var') => ({ code: 'coverage_problem', message, category: 'coverage', scope: 'portfolio', ticker: 'ABC', metric, start_date: '2026-10-23', end_date: '2026-11-06' });
+  const missing = note('Tail estimate has insufficient observations.');
+  d.risk.portfolio_metrics.historical_var.value = null;
+  d.risk.portfolio_metrics.historical_var.unavailable_reasons = [missing];
+  d.endpoint.total_equity = { value: null, unavailable_reasons: [note('Total valuation incomplete.', 'total_equity')] };
+  d.performance.warnings = [note('Performance source warning.', 'annualized_return')];
+  d.risk.warnings = [missing, note('Shared wording.', 'beta'), note('Shared wording.', 'sharpe_ratio')];
+  d.holdings.warnings = [{ code: 'corporate_action_failure', message: 'Holding corporate-action coverage failed.', ticker: 'ABC' }];
+  d.allocation.warnings = [note('Allocation price warning.', 'weight')];
+  d.warnings = [missing, ...d.performance.warnings, ...d.holdings.warnings, ...d.allocation.warnings];
+  const before = structuredClone(d), json = JSON.stringify(d);
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  const visible = withDetailsClosed(html);
+  for (const message of ['Tail estimate has insufficient observations.', 'Total valuation incomplete.', 'Performance source warning.', 'Holding corporate-action coverage failed.', 'Allocation price warning.']) {
+    assert.equal(visible.split(message).length - 1, 1, message);
+  }
+  assert.equal(visible.split('Shared wording.').length - 1, 2, 'Different metrics must survive consolidation');
+  const returns = visible.split('id="report-returns"')[1].split('id="report-holdings"')[0];
+  assert.match(returns, /historical_var/); assert.match(returns, /ABC/);
+  assert.match(returns, /23 October 2026/); assert.match(returns, /6 November 2026/);
+  assert.match(returns, /coverage_problem/);
+  const holdingSection = visible.split('id="report-holdings"')[1].split('id="report-allocation"')[0];
+  assert.match(holdingSection, /corporate_action_failure/);
+  assert.match(visible.split('id="report-allocation"')[1].split('id="report-coverage"')[0], /Allocation price warning/);
+  assert.deepEqual(d, before); assert.equal(JSON.stringify(d), json);
+});
+
+test('corporate-action detail is expandable while source and classification limits remain visible', () => {
+  const d = clone(); d.performance.benchmark_ticker = 'CUSTOM';
+  d.performance.methodology.benchmark_return_basis = 'Supplied custom benchmark convention';
+  const html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
+  const visible = withDetailsClosed(html);
+  for (const text of ['Corporate-action checks depend on the price source', 'complete price coverage alone does not establish', 'not ETF look-through', 'historically versioned classifications', 'CUSTOM', 'Supplied custom benchmark convention']) assert.ok(visible.includes(text), text);
+  assert.ok(!visible.includes('continuous stored Tiingo coverage'));
+  assert.match(html, /<details[^>]*><summary>Corporate-action coverage by price source/);
+  for (const text of ['continuous stored Tiingo coverage from first portfolio trade through cutoff', 'Other sources use adjusted close', 'do not receive the same Tiingo coverage check', 'latest price dates do not establish corporate-action coverage']) assert.ok(html.includes(text), text);
+});
 
 test('validates complete real short/full/partial/weekend reports without dropping arrays', () => {
   for (const data of Object.values(fixtures)) assert.equal(api.isReportResponse(data), true);
@@ -147,14 +263,14 @@ test('dates, fresh-download disclosure, provenance and escaped backend text appe
   assert.ok(html.includes('&lt;script&gt;unsafe&lt;/script&gt;')); assert.ok(!html.includes('<script>unsafe'));
   assert.ok(html.includes('7 November 2026') && html.includes('6 November 2026'));
   assert.ok(html.includes('no persisted snapshot')); assert.ok(html.includes('Dataset origin is not provided'));
-  assert.ok(html.includes('Corporate-action validation is source-dependent'));
+  assert.ok(html.includes('Corporate-action checks depend on the price source'));
   assert.ok(html.includes('not an investment-policy target'));
   const full = renderToStaticMarkup(createElement(page.ReportContent, { data: fixtures.full }));
   assert.ok(!full.includes('<svg')); assert.ok(!full.includes('3 June 2025'));
   const shell = renderToStaticMarkup(createElement(page.Reports));
   assert.ok(shell.includes('Blank dates use automatic history boundaries'));
   assert.ok(shell.includes('Full history clears draft dates only'));
-  assert.ok(shell.includes('may differ if stored data changed'));
+  assert.ok(shell.includes('may differ if stored data or automatic date boundaries change'));
   assert.equal((shell.match(/ disabled=""/g) ?? []).length, 2);
 });
 
