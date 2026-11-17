@@ -204,6 +204,81 @@ test('Holdings retains visible valuation limits and local definitions without re
 });
 
 
+test('Overview renders supplied financial values with visible definitions and historical limitations', async () => {
+  const { createServer } = await import('vite');
+  const { default: react } = await import('@vitejs/plugin-react');
+  const { createElement } = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, ws: false, watch: null } });
+  try {
+    const { OverviewContent } = await server.ssrLoadModule('/src/pages/Overview.tsx');
+    for (const profit of [-25.125, 0, 25.125]) {
+      const data = { portfolio_id: 7, name: 'Selected <portfolio>', currency: 'GBP', as_of_date: '2026-01-05', total_equity: 1234.56789, net_contributions: 1200, profit_loss: profit };
+      const before = structuredClone(data);
+      const html = renderToStaticMarkup(createElement(OverviewContent, { state: { status: 'ready', data }, retry() {} }));
+      const visible = withDetailsClosed(html);
+      for (const [label, value, definition] of [
+        ['Total equity', data.total_equity, 'Holdings value plus cash balance'],
+        ['Net contributions', data.net_contributions, 'Deposits minus withdrawals'],
+        ['Profit / loss', profit, 'Total equity minus net contributions'],
+      ]) {
+        const metric = visible.split(`<dt>${label}</dt>`)[1].split('</div>')[0];
+        assert.ok(metric.includes(formatOptionalCurrency(value, 'GBP')));
+        assert.ok(metric.includes(definition));
+        if (label === 'Profit / loss') {
+          if (profit) assert.ok(metric.includes(profit < 0 ? 'value-negative' : 'value-positive'));
+          else assert.doesNotMatch(metric, /value-negative|value-positive/);
+        }
+      }
+      assert.match(visible, /Selected &lt;portfolio&gt;/);
+      assert.match(visible, /<time dateTime="2026-01-05">5 January 2026<\/time>/);
+      assert.match(visible, /All amounts in GBP/);
+      assert.match(visible, /not today’s account valuation or live market prices/);
+      assert.match(visible, /latest available historical prices without a maximum price-age restriction/);
+      assert.deepEqual(data, before, 'Rendering must not calculate or replace supplied values');
+    }
+  } finally { await server.close(); }
+});
+
+test('Overview unavailable states expose no financial cards and retry controls retain the selected portfolio', async () => {
+  const { createServer } = await import('vite');
+  const { default: react } = await import('@vitejs/plugin-react');
+  const { createElement } = await import('react');
+  const { renderToStaticMarkup } = await import('react-dom/server');
+  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, ws: false, watch: null } });
+  try {
+    const { OverviewContent } = await server.ssrLoadModule('/src/pages/Overview.tsx');
+    const requests = [];
+    const data = { portfolio_id: 7, name: 'Selected portfolio', currency: 'GBP', as_of_date: '2026-01-05', total_equity: 0, net_contributions: 0, profit_loss: 0 };
+    globalThis.fetch = async url => { requests.push(url); return new Response(JSON.stringify(data)); };
+    let loaded;
+    const retry = async () => { loaded = await getPortfolioSummary(signal(), 7); };
+    function buttons(node) {
+      if (!node || typeof node !== 'object') return [];
+      return [...(node.type === 'button' ? [node] : []), ...[node.props?.children].flat(Infinity).flatMap(buttons)];
+    }
+    for (const state of [{ status: 'loading' }, { status: 'empty' }, { status: 'error', message: 'Portfolio request failed (HTTP 404). Portfolio 7 not found' }]) {
+      const tree = OverviewContent({ state, retry });
+      const html = renderToStaticMarkup(tree);
+      assert.doesNotMatch(html, /<dt>Total equity|summary-metrics|£0\.00/);
+      if (state.status === 'loading') {
+        assert.match(html, /aria-busy="true"/); assert.match(html, /role="status"/);
+        assert.equal(buttons(tree).length, 0);
+      } else {
+        assert.match(html, /aria-busy="false"/);
+        if (state.status === 'error') { assert.match(html, /role="alert"/); assert.ok(html.includes(state.message)); }
+        else assert.match(html, /No portfolio summary yet/);
+        const [button] = buttons(tree); assert.equal(buttons(tree).length, 1);
+        assert.equal(button.props.children, state.status === 'error' ? 'Try again' : 'Check again');
+        await button.props.onClick();
+        const ready = renderToStaticMarkup(createElement(OverviewContent, { state: { status: 'ready', data: loaded }, retry }));
+        assert.match(ready, /Selected portfolio/); assert.equal((ready.match(/£0\.00/g) ?? []).length, 3);
+      }
+    }
+    assert.deepEqual(requests, ['/api/portfolios/7/summary', '/api/portfolios/7/summary']);
+  } finally { globalThis.fetch = nativeFetch; await server.close(); }
+});
+
 test('Overview requests the configured portfolio ID and rejects a mismatched response', async () => {
   const data = { portfolio_id: 7, name: 'Configured portfolio', currency: 'GBP', as_of_date: '2026-01-05', total_equity: 0, net_contributions: 0, profit_loss: 0 };
   globalThis.fetch = async (url, options) => {

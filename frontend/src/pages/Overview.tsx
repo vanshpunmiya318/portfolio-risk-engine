@@ -29,6 +29,10 @@ export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
   }, [portfolioId, attempt]);
 
   const retry = () => setAttempt((value) => value + 1);
+  return <OverviewContent state={state} retry={retry} />;
+}
+
+export function OverviewContent({ state, retry }: { state: SummaryState; retry: () => void }) {
   return (
     <>
       <section className="page-intro">
@@ -36,7 +40,7 @@ export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
         <h1>Portfolio overview</h1>
         <p className="lede">Portfolio value and invested capital, grounded in your historical portfolio data.</p>
       </section>
-      <section className="summary-section" aria-label="Portfolio summary" aria-busy={state.status === 'loading'}>
+      <section className="summary-section overview-summary" aria-label="Portfolio summary" aria-busy={state.status === 'loading'}>
         {state.status === 'loading' && <div className="summary-state" role="status">
           <span className="eyebrow">Connecting to portfolio</span><h2>Loading your summary…</h2>
           <p>Retrieving the latest available historical valuation.</p>
@@ -60,17 +64,17 @@ export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
           <dl className="summary-metrics">
             <div className="summary-metric summary-metric-primary"><dt>Total equity</dt>
               <dd>{formatCurrency(state.data.total_equity, state.data.currency)}</dd>
-              <dd className="metric-note">Portfolio value including cash</dd></div>
+              <dd className="metric-note">Holdings value plus cash balance</dd></div>
             <div className="summary-metric"><dt>Net contributions</dt>
               <dd>{formatCurrency(state.data.net_contributions, state.data.currency)}</dd>
-              <dd className="metric-note">Net capital contributed</dd></div>
+              <dd className="metric-note">Deposits minus withdrawals</dd></div>
             <div className="summary-metric"><dt>Profit / loss</dt>
               <dd className={state.data.profit_loss < 0 ? 'value-negative' : state.data.profit_loss > 0 ? 'value-positive' : undefined}>
                 {formatCurrency(state.data.profit_loss, state.data.currency)}</dd>
-              <dd className="metric-note">As reported by the risk engine</dd></div>
+              <dd className="metric-note">Total equity minus net contributions</dd></div>
           </dl>
           <p className="valuation-note">All amounts in {state.data.currency}. Values are as of the historical valuation date above,
-            not today’s account valuation or live market prices.</p>
+            not today’s account valuation or live market prices. Summary valuation uses the latest available historical prices without a maximum price-age restriction.</p>
         </>}
       </section>
       <footer className="page-footer"><span>Portfolio Risk Engine</span><span>Clarity before complexity.</span></footer>
