@@ -11,6 +11,8 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
+from starlette.datastructures import MutableHeaders
+from starlette.types import Message, Receive, Scope, Send
 
 from riskengine.api.analysis_models import PerformanceResponse, RiskResponse
 from riskengine.api.allocation_models import AllocationResponse
@@ -70,7 +72,30 @@ async def lifespan(application: FastAPI):
     yield
 
 
-app = FastAPI(
+class PortfolioAPI(FastAPI):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await super().__call__(scope, receive, send)
+            return
+
+        path = scope["path"]
+        root_path = scope.get("root_path", "").rstrip("/")
+        if root_path and path.startswith(root_path + "/"):
+            path = path[len(root_path):]
+        if not (path + "/").startswith(("/api/portfolio/", "/api/portfolios/")):
+            await super().__call__(scope, receive, send)
+            return
+
+        # Wrap the ASGI send outside FastAPI's error middleware so generated 500s are covered.
+        async def send_no_store(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+            await send(message)
+
+        await super().__call__(scope, receive, send_no_store)
+
+
+app = PortfolioAPI(
     title="Portfolio Risk Engine API",
     version="0.1.0",
     lifespan=lifespan,
@@ -103,8 +128,7 @@ def export_portfolio_report(
     content = report_json(report) if format == "json" else report_markdown(report)
     return Response(content=content,
                     media_type="application/json" if format == "json" else "text/markdown",
-                    headers={"Content-Disposition": f'attachment; filename="{report_filename(report, format)}"',
-                             "Cache-Control": "no-store"})
+                    headers={"Content-Disposition": f'attachment; filename="{report_filename(report, format)}"'})
 
 
 def _compose_report(request, portfolio_id, start_date, end_date, benchmark, confidence):
