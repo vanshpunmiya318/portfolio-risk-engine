@@ -137,6 +137,61 @@ def test_currency_conflicts_after_latest_price_do_not_affect_summary(overview_db
     assert http_get('/api/portfolio/summary') == baseline
 
 
+@pytest.fixture
+def unpriced_portfolio(overview_db):
+    with sqlite3.connect(overview_db) as c:
+        c.executescript("""
+        DELETE FROM transactions;
+        DELETE FROM cash_flows;
+        DELETE FROM portfolios;
+        INSERT INTO portfolios VALUES(203, 'Unpriced portfolio', 'USD');
+        INSERT INTO instruments(id,ticker,name,asset_type,currency,primary_source)
+        VALUES(3, 'UNPRICED', 'Unpriced stock', 'STOCK', 'USD', 'test');
+        INSERT INTO cash_flows VALUES(1, 203, '2026-01-02', 'DEPOSIT', 1000, 'USD', 'test');
+        INSERT INTO transactions VALUES(1, 203, 3, '2026-01-02', 'BUY', 2, 100, 'USD', 'test');
+        """)
+    return overview_db
+
+
+@pytest.mark.parametrize('path', ['/api/portfolios/203/summary', '/api/portfolio/summary'])
+def test_unpriced_holding_returns_conflict_without_totals(unpriced_portfolio, path):
+    assert http_get(path) == (409, {
+        'detail': 'Overview totals are unavailable because a required historical security price '
+                  'is missing on or before 2026-01-05.',
+    })
+
+
+def test_summary_can_use_earlier_historical_price_at_existing_cutoff(unpriced_portfolio):
+    with sqlite3.connect(unpriced_portfolio) as c:
+        c.execute("""
+        INSERT INTO prices(instrument_id,date,open,high,low,close,adjusted_close,source,fetched_at)
+        VALUES(3, '2026-01-04', 120, 120, 120, 120, 120, 'test', '2026-01-04T00:00:00Z')
+        """)
+    assert http_get('/api/portfolios/203/summary') == (200, {
+        'portfolio_id': 203, 'name': 'Unpriced portfolio', 'currency': 'USD',
+        'as_of_date': '2026-01-05', 'total_equity': 1040, 'net_contributions': 1000,
+        'profit_loss': 40,
+    })
+
+
+def test_currency_conflict_takes_precedence_over_missing_price(unpriced_portfolio):
+    with sqlite3.connect(unpriced_portfolio) as c:
+        c.execute("INSERT INTO cash_flows VALUES(2, 203, '2026-01-03', 'DEPOSIT', 100, 'EUR', 'test')")
+    assert http_get('/api/portfolios/203/summary') == (409, {
+        'detail': 'Overview totals are unavailable because a trade, instrument, or cash flow '
+                  'uses a currency other than USD. No currency conversion was performed.',
+    })
+
+
+def test_unexpected_valuation_error_is_not_classified_as_missing_price(overview_db, monkeypatch):
+    def fail(*args):
+        raise ValueError('Unexpected valuation failure')
+
+    monkeypatch.setattr(main, 'get_total_portfolio_equity', fail)
+    with pytest.raises(ValueError, match='Unexpected valuation failure'):
+        http_get('/api/portfolios/1/summary')
+
+
 def test_missing_id_does_not_fall_back_and_invalid_ids_are_rejected(overview_db):
     assert http_get('/api/portfolios/999/summary') == (404, {'detail': 'Portfolio 999 not found'})
     for value in ('0', '-1', 'bad', '9223372036854775808'):

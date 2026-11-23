@@ -30,7 +30,7 @@ from riskengine.risk.holdings_service import (
 )
 
 from riskengine.db.connection import get_connection
-from riskengine.db.portfolios import get_total_portfolio_equity
+from riskengine.db.portfolios import MissingHistoricalPriceError, get_total_portfolio_equity
 from riskengine.db.transactions import get_net_cash_flows, has_portfolio_currency_conflict
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -218,11 +218,16 @@ def _portfolio_summary(request: Request, portfolio_id: int | None = None):
                 ),
             )
 
-        equity = float(
-            get_total_portfolio_equity(
-                connection, portfolio_id, as_of_date
-            )
-        )
+        try:
+            equity = float(get_total_portfolio_equity(connection, portfolio_id, as_of_date))
+        except MissingHistoricalPriceError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Overview totals are unavailable because a required historical security price "
+                    f"is missing on or before {as_of_date}."
+                ),
+            ) from error
 
         contributions = float(
             get_net_cash_flows(

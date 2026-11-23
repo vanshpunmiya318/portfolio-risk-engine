@@ -24,6 +24,10 @@ from riskengine.db.prices import get_price_with_max_age
 from riskengine.db.prices import get_portfolio_price_coverage
 
 
+class MissingHistoricalPriceError(ValueError):
+    """A held security has no price on or before the valuation cutoff."""
+
+
 @dataclass(frozen=True)
 class PreparedPositions:
     """Positions bound to one caller-owned read snapshot and inclusive cutoff.
@@ -242,7 +246,7 @@ def value_positions(positions, as_of_date, max_age_days, allow_missing_prices,
     )
 
     if missing_tickers and not allow_missing_prices:
-        raise ValueError(
+        raise MissingHistoricalPriceError(
             "No price available as of "
             f"{as_of_date} for: "
             f"{sorted(missing_tickers)}"
