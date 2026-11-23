@@ -212,6 +212,29 @@ test('plain-language metric explanations retain confidence, horizon, benchmark a
   assert.deepEqual(d, before);
 });
 
+test('CVaR explains the loss convention and preserves signed and unavailable values', () => {
+  const d = fixture();
+  for (const [value, label] of [[.020680, '2.07%'], [-.02, '-2.00%'], [null, 'Unavailable']]) {
+    d.portfolio_metrics.historical_cvar = metric(value);
+    if (value === null) {
+      d.portfolio_metrics.historical_cvar.unavailable_reasons = [{
+        ...reason(), scope: 'portfolio', metric: 'portfolio.historical_cvar',
+        code: 'insufficient_observations', message: 'Insufficient observations for CVaR.', ticker: null,
+      }];
+    }
+    const html = withDetailsClosed(renderToStaticMarkup(createElement(page.RiskContent, { data: d })));
+    assert.ok(html.includes('historical one-session estimates at 95.00% confidence'));
+    assert.ok(html.includes('Actual losses can exceed these estimates.'));
+    const card = html.match(/<dt>One-session historical CVaR<\/dt>(.*?)<\/div>/s)?.[1];
+    assert.ok(card, 'The one-session CVaR card is visible');
+    assert.ok(card.includes(`<dd><span>${label}</span>`), label);
+    assert.ok(card.includes('Average loss in the worst historical tail.'));
+    assert.ok(card.includes('Positive values indicate an estimated loss.'));
+    assert.ok(card.includes('Negative values indicate an average gain within that tail.'));
+    if (value === null) assert.ok(card.includes('Insufficient observations for CVaR.'));
+  }
+});
+
 test('risk calculation details are retained without burying missing reasons or duplicating the horizon', () => {
   const d = fixture(); d.benchmark_ticker = 'QQQ'; d.metric_conventions.annualization_sessions = 250;
   d.metric_conventions.risk_free_rate = .025; d.confidence = .99;

@@ -62,7 +62,7 @@ export function RiskContent({ data }: { data: RiskResponse }) {
     annualized_volatility: 'How widely historical session returns varied, expressed at an annual scale. This is not a forecast.',
     beta: `Historical sensitivity to ${data.benchmark_ticker} returns over matched intervals. A beta of 1 indicates similar sensitivity, not the same return.`,
     historical_var: 'A percentile-based estimate from historical returns.',
-    historical_cvar: 'Average return in the worst historical tail.',
+    historical_cvar: 'Average loss in the worst historical tail. Positive values indicate an estimated loss. Negative values indicate an average gain within that tail.',
     sharpe_ratio: `Historical return relative to variability, using a ${formatWeight(data.metric_conventions.risk_free_rate)} annual risk-free rate. A ratio, not a percentage.`,
     maximum_drawdown: 'Largest historical fall from a running peak within this reporting period, including the baseline. Displayed as a positive loss magnitude.',
   };
