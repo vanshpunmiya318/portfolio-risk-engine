@@ -544,6 +544,21 @@ def get_cash_flows(connection, portfolio_id):
 
 
 
+def has_portfolio_currency_conflict(connection, portfolio_id, as_of_date, currency):
+    """Check all trades and cash flows through the cutoff, including closed positions."""
+    return bool(connection.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM transactions t LEFT JOIN instruments i ON i.id = t.instrument_id
+            WHERE t.portfolio_id = ? AND t.date <= ? AND (t.currency != ? OR i.currency != ?)
+        ) OR EXISTS (
+            SELECT 1 FROM cash_flows WHERE portfolio_id = ? AND date <= ? AND currency != ?
+        )
+        """,
+        (portfolio_id, as_of_date, currency, currency, portfolio_id, as_of_date, currency),
+    ).fetchone()[0])
+
+
 def get_net_cash_flows(
     connection,
     portfolio_id,

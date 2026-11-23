@@ -76,6 +76,67 @@ def test_legacy_selects_first_and_has_exact_specific_response_parity(overview_db
     assert legacy[1]['as_of_date'] == '2026-01-06'
 
 
+@pytest.mark.parametrize(('currency', 'deposit'), [('EUR', 4321), ('USD', 1000)])
+def test_single_currency_cash_flows_keep_exact_totals(overview_db, currency, deposit):
+    with sqlite3.connect(overview_db) as c:
+        c.execute("INSERT INTO portfolios VALUES(204, 'Cash portfolio', ?)", (currency,))
+        c.execute(
+            "INSERT INTO cash_flows VALUES(204, 204, '2026-01-02', 'DEPOSIT', ?, ?, 'test')",
+            (deposit, currency),
+        )
+    assert http_get('/api/portfolios/204/summary') == (200, {
+        'portfolio_id': 204, 'name': 'Cash portfolio', 'currency': currency,
+        'as_of_date': '2026-01-05', 'total_equity': deposit,
+        'net_contributions': deposit, 'profit_loss': 0,
+    })
+
+
+def test_mixed_currency_deposits_fail_before_calculating_totals(overview_db, monkeypatch):
+    with sqlite3.connect(overview_db) as c:
+        c.executescript("""
+        INSERT INTO portfolios VALUES(204, 'Mixed cash portfolio', 'EUR');
+        INSERT INTO cash_flows VALUES
+        (204, 204, '2026-01-02', 'DEPOSIT', 4321, 'EUR', 'test'),
+        (205, 204, '2026-01-03', 'DEPOSIT', 100, 'USD', 'test');
+        """)
+
+    def unexpected_calculation(*args):
+        pytest.fail('Currency conflicts must be detected before calculating totals')
+
+    monkeypatch.setattr(main, 'get_total_portfolio_equity', unexpected_calculation)
+    monkeypatch.setattr(main, 'get_net_cash_flows', unexpected_calculation)
+    assert http_get('/api/portfolios/204/summary') == (409, {
+        'detail': 'Overview totals are unavailable because a trade, instrument, or cash flow '
+                  'uses a currency other than EUR. No currency conversion was performed.',
+    })
+
+
+@pytest.mark.parametrize(('instrument_id', 'trade_currency'), [(1, 'GBP'), (2, 'USD'), (999, 'GBP')])
+def test_trade_or_instrument_currency_conflict_has_no_totals(overview_db, instrument_id, trade_currency):
+    with sqlite3.connect(overview_db) as c:
+        c.execute(
+            "INSERT INTO transactions VALUES(3, 1, ?, '2026-01-05', 'BUY', 1, 10, ?, 'test')",
+            (instrument_id, trade_currency),
+        )
+    status, body = http_get('/api/portfolios/1/summary')
+    assert status == 409
+    assert set(body) == {'detail'}
+    assert 'uses a currency other than USD' in body['detail']
+    assert http_get('/api/portfolio/summary') == (status, body)
+
+
+def test_currency_conflicts_after_latest_price_do_not_affect_summary(overview_db):
+    baseline = http_get('/api/portfolios/1/summary')
+    assert baseline[0] == 200
+    with sqlite3.connect(overview_db) as c:
+        c.executescript("""
+        INSERT INTO cash_flows VALUES(4, 1, '2026-01-06', 'DEPOSIT', 100, 'EUR', 'test');
+        INSERT INTO transactions VALUES(3, 1, 2, '2026-01-06', 'BUY', 1, 10, 'GBP', 'test');
+        """)
+    assert http_get('/api/portfolios/1/summary') == baseline
+    assert http_get('/api/portfolio/summary') == baseline
+
+
 def test_missing_id_does_not_fall_back_and_invalid_ids_are_rejected(overview_db):
     assert http_get('/api/portfolios/999/summary') == (404, {'detail': 'Portfolio 999 not found'})
     for value in ('0', '-1', 'bad', '9223372036854775808'):

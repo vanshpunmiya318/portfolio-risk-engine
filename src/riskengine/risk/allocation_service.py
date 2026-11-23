@@ -6,7 +6,7 @@ from riskengine.api.allocation_models import AllocationResponse
 from riskengine.risk.holdings_service import get_holdings_summary, HoldingsDataConflict, HoldingsInputError
 from riskengine.risk.exposure import get_portfolio_exposure, _exposure_from_valued_holdings
 from riskengine.risk.metrics import portfolio_hhi
-from riskengine.db.transactions import get_cash_balance
+from riskengine.db.transactions import get_cash_balance, has_portfolio_currency_conflict
 
 
 def _issue(code, message, scope, ticker=None):
@@ -20,17 +20,8 @@ def _snapshot(connection, portfolio_id, day, scope, warnings, holdings_loader=No
     warnings.extend(_issue(w["code"], w["message"], scope, w.get("ticker")) for w in holdings["warnings"])
     reasons = []
     currency = holdings["currency"]
-    # Include closed holdings and cash flows, not merely currently open positions.
-    conflicts = connection.execute(
-        "SELECT DISTINCT i.ticker FROM transactions t JOIN instruments i ON i.id=t.instrument_id "
-        "WHERE t.portfolio_id=? AND t.date<=? AND (t.currency!=? OR i.currency!=?)",
-        (portfolio_id, cutoff, currency, currency),
-    ).fetchall() if cutoff else []
-    flow_conflict = connection.execute(
-        "SELECT 1 FROM cash_flows WHERE portfolio_id=? AND date<=? AND currency!=? LIMIT 1",
-        (portfolio_id, cutoff, currency),
-    ).fetchone() if cutoff else None
-    if conflicts or flow_conflict:
+    currency_conflict = cutoff is not None and has_portfolio_currency_conflict(connection, portfolio_id, cutoff, currency)
+    if currency_conflict:
         reasons.append(_issue("currency_conflict", "Historical transaction, instrument or cash-flow currencies conflict; no FX conversion is performed.", scope))
     complete = holdings["valuation_complete"] and not reasons
     if not holdings["valuation_complete"]:
@@ -60,7 +51,7 @@ def _snapshot(connection, portfolio_id, day, scope, warnings, holdings_loader=No
     else:
         reasons.append(_issue("no_invested_allocation", "No complete positive invested allocation is available for concentration or comparison.", scope))
     cash = None
-    if cutoff and not conflicts and not flow_conflict:
+    if cutoff and not currency_conflict:
         cash = float(get_cash_balance(connection, portfolio_id, cutoff))
         if not math.isfinite(cash):
             cash = None

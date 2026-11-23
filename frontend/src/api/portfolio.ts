@@ -30,11 +30,12 @@ export async function getPortfolioSummary(signal: AbortSignal, portfolioId = 1):
     headers: { Accept: 'application/json' },
   });
   if (response.status === 204) return null;
-  if (response.status === 404) {
+  if (response.status === 404 || response.status === 409) {
     const body: unknown = await response.json().catch(() => null);
-    if (typeof body === 'object' && body !== null && 'detail' in body &&
-      ['No portfolio found', 'No market prices available'].includes(String(body.detail))) return null;
-    if (typeof body === 'object' && body !== null && 'detail' in body && typeof body.detail === 'string') throw new Error(`Portfolio request failed (HTTP 404). ${body.detail}`);
+    if (typeof body === 'object' && body !== null && 'detail' in body && typeof body.detail === 'string') {
+      if (response.status === 404 && ['No portfolio found', 'No market prices available'].includes(body.detail)) return null;
+      throw new Error(`Portfolio request failed (HTTP ${response.status}). ${body.detail}`);
+    }
   }
   if (!response.ok) throw new Error(`Portfolio request failed (HTTP ${response.status}).`);
   const data: unknown = await response.json();

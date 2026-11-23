@@ -300,8 +300,9 @@ test('Overview retains empty and HTTP-error behavior when portfolio identity is 
   assert.equal(await getPortfolioSummary(signal(), 7), null);
   respond({ detail: 'No market prices available' }, 404);
   assert.equal(await getPortfolioSummary(signal(), 7), null);
-  respond({ detail: 'Conflict' }, 409);
-  await assert.rejects(getPortfolioSummary(signal(), 7), /Portfolio request failed \(HTTP 409\)/);
+  const detail = 'Overview totals are unavailable because a trade, instrument, or cash flow uses a currency other than GBP. No currency conversion was performed.';
+  respond({ detail }, 409);
+  await assert.rejects(getPortfolioSummary(signal(), 7), { message: `Portfolio request failed (HTTP 409). ${detail}` });
 });
 
 

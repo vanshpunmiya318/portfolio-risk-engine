@@ -31,7 +31,7 @@ from riskengine.risk.holdings_service import (
 
 from riskengine.db.connection import get_connection
 from riskengine.db.portfolios import get_total_portfolio_equity
-from riskengine.db.transactions import get_net_cash_flows
+from riskengine.db.transactions import get_net_cash_flows, has_portfolio_currency_conflict
 
 ROOT = Path(__file__).resolve().parents[3]
 logger = logging.getLogger("uvicorn.error")
@@ -207,6 +207,15 @@ def _portfolio_summary(request: Request, portfolio_id: int | None = None):
             raise HTTPException(
                 status_code=404,
                 detail="No market prices available",
+            )
+
+        if has_portfolio_currency_conflict(connection, portfolio_id, as_of_date, currency):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Overview totals are unavailable because a trade, instrument, or cash flow "
+                    f"uses a currency other than {currency}. No currency conversion was performed."
+                ),
             )
 
         equity = float(

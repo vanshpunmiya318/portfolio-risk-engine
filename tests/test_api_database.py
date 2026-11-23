@@ -7,6 +7,7 @@ import pytest
 from starlette.requests import Request
 
 from riskengine.api import main
+from riskengine.db.schema.loader import create_schema
 
 
 @pytest.mark.parametrize(
@@ -32,12 +33,14 @@ def test_startup_and_endpoint_use_same_database(
 
     expected = (tmp_path / relative_path).resolve()
     expected.parent.mkdir(parents=True, exist_ok=True)
+    create_schema(expected)
     with sqlite3.connect(expected) as connection:
         connection.executescript(
-            "CREATE TABLE portfolios (id INTEGER, name TEXT, currency TEXT);"
             "INSERT INTO portfolios VALUES (1, 'Test', 'USD');"
-            "CREATE TABLE prices (date TEXT);"
-            "INSERT INTO prices VALUES ('2026-01-02');"
+            "INSERT INTO instruments (id, ticker, name, asset_type, currency, primary_source) "
+            "VALUES (1, 'TEST', 'Test instrument', 'STOCK', 'USD', 'test');"
+            "INSERT INTO prices (instrument_id, date, open, high, low, close, adjusted_close, source, fetched_at) "
+            "VALUES (1, '2026-01-02', 120, 120, 120, 120, 120, 'test', '2026-01-02T00:00:00Z');"
         )
 
     opened = []
