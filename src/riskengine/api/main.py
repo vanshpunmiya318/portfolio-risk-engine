@@ -1,6 +1,7 @@
 
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager, closing
 from dataclasses import dataclass, asdict
 from datetime import date
@@ -129,6 +130,29 @@ def _compose_report(request, portfolio_id, start_date, end_date, benchmark, conf
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness_check(request: Request):
+    try:
+        with closing(get_connection(request.app.state.database.path, read_only=True)) as connection:
+            connection.execute("BEGIN")
+            # Resolve columns used by the serving API. Empty tables are valid.
+            for query in (
+                "SELECT id, name, currency FROM portfolios LIMIT 1",
+                "SELECT id, ticker, name, currency, sector, primary_source FROM instruments LIMIT 1",
+                "SELECT id, portfolio_id, instrument_id, date, transaction_type, quantity, price, currency, source "
+                "FROM transactions LIMIT 1",
+                "SELECT id, portfolio_id, date, flow_type, amount, currency, source FROM cash_flows LIMIT 1",
+                "SELECT instrument_id, date, open, high, low, close, adjusted_close, volume, source, fetched_at "
+                "FROM prices LIMIT 1",
+                "SELECT id, instrument_id, ex_date, action_type, ratio FROM corporate_actions LIMIT 1",
+                "SELECT instrument_id, start_date, end_date, source FROM corporate_action_coverage LIMIT 1",
+            ):
+                connection.execute(query).fetchone()
+    except (OSError, sqlite3.Error) as error:
+        raise HTTPException(status_code=503, detail="Configured database is not ready") from error
+    return {"status": "ready"}
 
 
 @app.get("/api/portfolios/{portfolio_id}/holdings", response_model=HoldingsResponse)
