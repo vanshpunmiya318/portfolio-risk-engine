@@ -97,9 +97,9 @@ portfolio-risk-engine/
 └── README.md
 ```
 
-## Installation
+## Windows local quickstart
 
-Requires Python 3.11 or later.
+Requires Python 3.11 or later and Node.js/npm on PATH. From Windows CMD:
 
 ```cmd
 git clone <repository-url>
@@ -107,9 +107,33 @@ cd portfolio-risk-engine
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -e ".[dev]"
+cd frontend
+npm.cmd ci
+cd ..
 ```
 
 Replace `<repository-url>` with the actual GitHub repository URL.
+
+Provision a usable Portfolio Risk Engine SQLite database before starting. By default FastAPI opens
+`data\historical_portfolio.db`. Historical database files are excluded from Git, and a fresh checkout
+does not include a usable database. To use an existing database elsewhere, set `RISKENGINE_DB` to its path.
+`RISKENGINE_DEMO=1` takes precedence over `RISKENGINE_DB` and selects `data\demo_portfolio.db`, which must also
+be provisioned. Use `set "RISKENGINE_DEMO="` in CMD to clear demo mode.
+
+```cmd
+rem Optional: select a portfolio ID that exists in the chosen database (default: 1)
+set "VITE_PORTFOLIO_ID=1"
+dev.cmd
+```
+
+Open http://127.0.0.1:5173/holdings once the launcher prints `Ready`.
+While FastAPI is running, http://127.0.0.1:8000/health checks process liveness and
+http://127.0.0.1:8000/ready checks database access and required schema. If startup reports a database
+problem, check which file the environment selects and whether it exists, is readable, and has the
+application schema. If a page reports a missing portfolio after startup, check that
+`VITE_PORTFOLIO_ID` exists in the selected database. An empty database can pass readiness.
+Type `stop` then Enter (or press Ctrl+C), wait for shutdown, and run `dev.cmd` again after changing settings.
+See the [frontend README](frontend/README.md) for the seven routes and port overrides.
 
 ### Run Tests
 

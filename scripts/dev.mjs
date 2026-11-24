@@ -64,6 +64,22 @@ async function portAvailable(port) {
   });
 }
 
+function waitForExit(child, timeout) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  if (!child.pid) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off('exit', exited);
+      resolve(false);
+    }, timeout);
+    function exited() {
+      clearTimeout(timer);
+      resolve(true);
+    }
+    child.once('exit', exited);
+  });
+}
+
 async function run() {
   const python = join(root, '.venv', 'Scripts', 'python.exe');
   const lock = join(root, 'tmp', 'portfolio-risk-dev.lock');
@@ -88,29 +104,30 @@ async function run() {
         else if (child.stdin?.writable) child.stdin.end('stop\n');
       }
       await Promise.all(children.map(async (child) => {
-        if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
-        await new Promise((resolve) => {
-          const timer = setTimeout(resolve, 5000);
-          child.once('exit', () => { clearTimeout(timer); resolve(); });
-        });
-        if (child.exitCode === null && child.signalCode === null) {
-          // Fallback targets only our owned process tree, never a port owner.
-          const result = await new Promise((resolve) => {
-            const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-            killer.once('exit', resolve);
-            killer.once('error', () => resolve(-1));
-          });
-          if (result !== 0 && child.exitCode === null && child.signalCode === null) {
-            cleanupFailed = true;
-            console.error(`Could not terminate owned process ${child.pid}; retaining the dev lock for inspection.`);
-          }
+        if (!child.pid || await waitForExit(child, 5000)) return;
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        // Run against the live child we spawned, never a PID read from a lock or port.
+        const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        killer.on('error', () => {});
+        const killCompleted = await waitForExit(killer, 5000);
+        if (!killCompleted) killer.kill();
+        const exited = await waitForExit(child, 2000);
+        // After a failed tree kill, the root exiting alone cannot confirm descendant termination.
+        if (!killCompleted || killer.exitCode !== 0 || !exited) {
+          cleanupFailed = true;
+          console.error(`Could not confirm termination of owned process tree ${child.pid}.`);
         }
       }));
       if (lockOwned && !cleanupFailed) {
         try {
-          if (readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock);
-        } catch (error) { console.error(`Could not clear dev lock: ${error.message}`); }
+          if (readFileSync(lock, 'utf8') !== String(process.pid)) throw new Error('Lock ownership changed.');
+          unlinkSync(lock);
+        } catch (error) {
+          cleanupFailed = true;
+          console.error(`Could not clear dev lock: ${error.message}`);
+        }
       }
+      if (cleanupFailed) console.error('Before removing tmp\\portfolio-risk-dev.lock, confirm that the launcher and its backend and frontend processes have exited and the configured ports are free.');
       console.log(cleanupFailed ? 'Development shutdown needs manual inspection.' : 'Development servers stopped.');
       process.exit(cleanupFailed ? 1 : code);
     })();
@@ -148,7 +165,7 @@ async function run() {
     mkdirSync(dirname(lock), { recursive: true });
     let handle;
     try { handle = openSync(lock, 'wx'); }
-    catch { throw new Error('A dev runner lock exists at tmp\\portfolio-risk-dev.lock. Another runner may be active. After an abnormal shutdown, verify the prior runner is gone and its configured ports are unused before removing that lock.'); }
+    catch { throw new Error('A dev runner lock exists at tmp\\portfolio-risk-dev.lock. Another runner may be active. Before removing the lock, confirm the prior launcher and its backend and frontend processes have exited and both configured ports are free.'); }
     lockOwned = true;
     try { writeFileSync(handle, String(process.pid)); }
     finally { closeSync(handle); }
@@ -207,17 +224,30 @@ async function run() {
       cwd: root, windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'],
     }), 'FastAPI');
     const deadline = Date.now() + 30000;
+    const readinessUrl = `http://127.0.0.1:${apiPort}/ready`;
+    const databaseHelp = `Check that RISKENGINE_DB points to a usable SQLite database. RISKENGINE_DEMO=1 overrides it and selects the demo database. With neither set, provision data/historical_portfolio.db. Check ${readinessUrl} while FastAPI is running.`;
     let ready = false;
-    while (!stopping && Date.now() < deadline) {
-      try {
-        if (!apiReady) throw new Error('Waiting for the owned API process.');
-        const response = await fetch(`http://127.0.0.1:${apiPort}/health`, { signal: AbortSignal.timeout(500) });
-        if (response.ok && api.exitCode === null) { ready = true; break; }
-      } catch { /* Retry while the owned API starts. */ }
-      await new Promise((resolve) => setTimeout(resolve, 150));
+    while (!stopping && api.exitCode === null && api.signalCode === null) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      if (apiReady) {
+        const response = await fetch(readinessUrl, {
+          redirect: 'manual', signal: AbortSignal.timeout(Math.min(500, remaining)),
+        }).catch(() => undefined); // Retry transport failures within the startup deadline.
+        if (response) {
+          await response.body?.cancel();
+          if (stopping || api.exitCode !== null || api.signalCode !== null) return;
+          if (response.status !== 200) {
+            throw new Error(`Database is not ready (/ready returned HTTP ${response.status}). ${databaseHelp}`);
+          }
+          ready = true;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.min(150, Math.max(0, deadline - Date.now()))));
     }
-    if (stopping) return;
-    if (!ready) throw new Error('FastAPI did not become ready within 30 seconds.');
+    if (stopping || api.exitCode !== null || api.signalCode !== null) return;
+    if (!ready) throw new Error(`Database readiness could not be confirmed within 30 seconds. ${databaseHelp}`);
     const vite = watch(fork(script, ['--vite-child'], {
       cwd: root, windowsHide: true, stdio: ['pipe', 'inherit', 'inherit', 'ipc'],
     }), 'Vite');
@@ -229,6 +259,7 @@ async function run() {
     if (stopping) return;
     console.log(`\nReady: http://127.0.0.1:${vitePort}/holdings\nFastAPI: http://127.0.0.1:${apiPort}\nPress Ctrl+C or type stop then Enter to shut down both servers.`);
   } catch (error) {
+    if (stopping) return;
     console.error(`Development startup failed: ${error.message}`);
     await stop(1);
   }
