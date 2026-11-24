@@ -4,11 +4,14 @@ from pathlib import Path
 from riskengine.db.connection import get_connection
 
 
-def create_schema(db_path: str | Path) -> None:
+def schema_sql() -> str:
     schema_dir = Path(__file__).parent
+    return "\n".join(
+        (schema_dir / filename).read_text(encoding="utf-8")
+        for filename in ("instruments.sql", "portfolios.sql", "prices.sql")
+    )
 
-    with closing(get_connection(db_path)) as connection:
-        for schema_file in sorted(schema_dir.glob("*.sql")):
-            connection.executescript(
-                schema_file.read_text(encoding="utf-8")
-            )
+
+def create_schema(db_path: str | Path) -> None:
+    with closing(get_connection(db_path)) as connection, connection:
+        connection.executescript("BEGIN;\n" + schema_sql())

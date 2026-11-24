@@ -135,6 +135,47 @@ application schema. If a page reports a missing portfolio after startup, check t
 Type `stop` then Enter (or press Ctrl+C), wait for shutdown, and run `dev.cmd` again after changing settings.
 See the [frontend README](frontend/README.md) for the seven routes and port overrides.
 
+### Set up a managed database
+
+After installing the backend in `.venv`, run one of these commands from the repository root in
+Windows CMD. Both create a new `%LOCALAPPDATA%\Portfolio Risk Engine\portfolio.db`.
+
+```cmd
+.venv\Scripts\python.exe -m riskengine.db.lifecycle create
+.venv\Scripts\python.exe -m riskengine.db.lifecycle adopt "D:\My Portfolio\existing.db"
+```
+
+`create` starts with empty tables. `adopt` copies a compatible database using a SQLite snapshot,
+including committed WAL data visible to SQLite. It leaves the source database in place. Both
+commands refuse to replace an existing database. Use `--data-root "D:\My Portfolio\Isolated"` after
+the subcommand to choose a different absolute local directory outside the repository.
+
+SQLite locates journal, WAL and shared-memory files using the database filename. Both
+`adopt` and `inspect` reject a source with multiple filesystem hard links because SQLite
+could read a different set of journal files and miss committed data. Use a standalone copy made
+with a supported SQLite backup or export. Read-only WAL access preserves the source's financial
+records and schema version. SQLite can still create sidecars or update shared-memory state.
+The path checks address ordinary misuse and supported concurrent setup operations. They do not
+provide isolation from arbitrary filesystem changes by another process running as the same OS user.
+
+```cmd
+.venv\Scripts\python.exe -m riskengine.db.lifecycle inspect "%LOCALAPPDATA%\Portfolio Risk Engine\portfolio.db"
+set "RISKENGINE_DEMO="
+set "RISKENGINE_DB=%LOCALAPPDATA%\Portfolio Risk Engine\portfolio.db"
+dev.cmd
+```
+
+`inspect` checks compatibility and reports the schema version. The original V1 schema uses version
+0. Managed copies and new databases use version 1 with the same financial schema. Setup checks the
+project's schema definitions conservatively and can reject customized schemas. Compatibility does
+not require portfolio records or complete market-price history. Setup does not change the launcher's
+default database selection or upgrade an existing database in place.
+
+Adoption stops after 30 seconds of continuously reported SQLite backup contention. The timer
+resets when backup makes progress, and individual SQLite calls can take additional time.
+An abrupt interruption can leave an unpublished `.portfolio-setup-*.db` file. The next attempt uses
+a new temporary filename. If cleanup fails, setup reports the retained path.
+
 ### Run Tests
 
 ```cmd
