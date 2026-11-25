@@ -1,7 +1,7 @@
 """Connection boundary for future protected local mutation services."""
 
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
@@ -22,6 +22,25 @@ _TRANSACTION_OPTIONS = {"isolation_level": None}
 if hasattr(sqlite3, "LEGACY_TRANSACTION_CONTROL"):
     # Keep explicit BEGIN/COMMIT semantics if Python changes its default.
     _TRANSACTION_OPTIONS["autocommit"] = sqlite3.LEGACY_TRANSACTION_CONTROL
+
+
+def _close_after_failure(connection: sqlite3.Connection, primary: BaseException) -> None:
+    try:
+        connection.close()
+    except BaseException as error:
+        primary.add_note("Secondary SQLite connection cleanup failure.")
+        primary.cleanup_error = error
+
+
+@contextmanager
+def _closing(connection: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    try:
+        yield connection
+    except BaseException as error:
+        _close_after_failure(connection, error)
+        raise
+    else:
+        connection.close()
 
 
 class ApplicationWriteError(RuntimeError):
@@ -124,7 +143,7 @@ class ApplicationWrites:
                     raise ApplicationWriteError("file_identity")
                 uri = path.as_uri()
                 try:
-                    with closing(sqlite3.connect(
+                    with _closing(sqlite3.connect(
                         uri + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS, **_TRANSACTION_OPTIONS,
                     )) as probe:
                         if self._identity(path) != identity:
@@ -152,6 +171,10 @@ class ApplicationWrites:
             except (sqlite3.Error, OSError) as error:
                 raise ApplicationWriteError("connection_failure") from error
             yield connection
-        finally:
+        except BaseException as error:
+            if connection is not None:
+                _close_after_failure(connection, error)
+            raise
+        else:
             if connection is not None:
                 connection.close()

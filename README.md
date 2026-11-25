@@ -261,25 +261,56 @@ the application is running. Supported restore and replacement workflows belong t
 The boundary assumes the OS user trusts other processes that can change their files and does not
 sandbox developer scripts, Streamlit writers, ingestion jobs, or external SQLite tools.
 
-Phase 2.3C callers should use `app.state.database_writes.connect()` after request authorization.
-This context manager opens an existing file with SQLite URI `mode=rw`, checks the schema and
-identity, and closes the connection on exit. Each connection verifies foreign-key enforcement,
-uses a two-second SQLite busy timeout and leaves persistent journal mode alone. Statements run
-in SQLite autocommit mode until the caller explicitly begins a transaction. Phase 2.3C will
-own transaction scopes, rollback policy and serialization. The connection boundary checks
-structure on open. The lifecycle `inspect` command also checks existing data integrity.
+The write capability opens an existing file with SQLite URI `mode=rw` and checks its schema
+and identity. Each connection verifies foreign-key enforcement, uses a two-second SQLite
+busy timeout and leaves persistent journal mode alone. The lifecycle `inspect` command
+also checks existing data integrity.
 
 The file permission check and successful SQLite initialization establish prerequisites for
 writing. A statement can still fail because of directory permissions, journal creation,
 contention, disk conditions or other runtime errors. The timeout applies to SQLite lock
-contention, with no overall deadline for a connection or transaction. Phase 2.3C must handle
-statement failures inside explicit transaction scopes.
+contention, with no overall deadline for a connection or transaction.
 
 If SQLite reports that rollback journal recovery is required during read-only validation,
 the connection boundary refuses writable access and leaves the database and journal intact.
 Keep both files together and arrange controlled SQLite recovery before retrying. The application
 does not recover journals automatically. A non-hot rollback journal and ordinary WAL sidecars
 can remain usable.
+
+### Execute an application transaction
+
+Future FastAPI mutation services use `app.state.database_transactions.run(operation)` after
+request authorization. The protected local API verifies the request and session. The managed
+database capability verifies the startup-selected target. The executor then acquires a fresh
+connection and begins `BEGIN IMMEDIATE` before invoking the synchronous operation. Put
+state-dependent financial reads and validation inside that callback so they share the same
+snapshot as the writes. Raise `MutationRejected` to reject invalid financial state or input.
+
+The callback receives a thread-bound `Transaction` with
+`execute(sql, parameters=())`, which returns materialized rows as tuples. Return plain
+scalar data or lists, tuples and string-keyed dictionaries of plain data. Live database
+resources and asynchronous operations are rejected. SQLite's authorizer limits callback
+SQL to data statements and blocks transaction control, savepoints, attachments, PRAGMAs
+and schema changes. A statement failure or interruption poisons the transaction even if the
+callback catches it. Interruption exceptions retain their original type. The handle expires
+when the callback exits. Nested executor calls in the
+same execution context fail immediately. Keep callbacks short and synchronous on one worker
+thread, with no spawned transaction workers or external side effects.
+
+SQLite's write reservation serializes writers for the same database across connections and
+processes. There is no application lock or automatic retry. The executor commits only after
+successful callback execution and result validation. It attempts rollback on failure and
+always attempts connection cleanup. `TransactionError` reports a reason, phase and outcome.
+`not_started` and `rolled_back` describe confirmed outcomes. `unknown` covers failures
+where the transaction state does not establish what persisted. A cleanup failure after a
+successful commit reports `committed`. Treat both `unknown` and `committed` as requiring
+reconciliation before any retry. Preserve the primary error and log secondary failures
+internally. Public error mapping must omit raw causes and financial data.
+
+These rules govern supported application callbacks. Same-user file manipulation and trusted
+process internals remain outside the boundary. Phase 2.4 will address backup, restore and
+controlled recovery. User-facing financial editing, domain-specific mutation services, public
+error mapping and any persistent idempotency requirements belong to later milestones.
 
 Run the write-boundary tests with
 `.venv\Scripts\python.exe -m pytest tests\test_application_writes.py -q`.

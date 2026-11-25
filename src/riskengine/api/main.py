@@ -34,6 +34,7 @@ from riskengine.risk.holdings_service import (
 )
 
 from riskengine.db.application_writes import ApplicationWrites
+from riskengine.db.application_transactions import TransactionExecutor
 from riskengine.db.connection import get_read_only_connection
 from riskengine.db.portfolios import MissingHistoricalPriceError, get_total_portfolio_equity
 from riskengine.db.transactions import get_net_cash_flows, has_portfolio_currency_conflict
@@ -73,15 +74,16 @@ def select_database() -> DatabaseSelection:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     previous_access = getattr(application.state, "local_access", None)
-    previous_writes = getattr(application.state, "database_writes", None)
+    previous_transactions = getattr(application.state, "database_transactions", None)
     access = load_local_access()
     selection = select_database()
     application.state.local_access = access
     application.state.database = selection
-    application.state.database_writes = ApplicationWrites(
+    writes = ApplicationWrites(
         selection.path, selection.mode, protected=isinstance(access, LocalAccess),
         data_root=os.environ.get("RISKENGINE_WRITE_DATA_ROOT"),
     )
+    application.state.database_transactions = TransactionExecutor(writes)
     logger.info(
         "Portfolio API module=%s database=%s mode=%s access=read-only",
         Path(__file__).resolve(), selection.path, selection.mode,
@@ -90,7 +92,7 @@ async def lifespan(application: FastAPI):
         yield
     finally:
         application.state.local_access = previous_access
-        application.state.database_writes = previous_writes
+        application.state.database_transactions = previous_transactions
 
 
 class PortfolioAPI(FastAPI):

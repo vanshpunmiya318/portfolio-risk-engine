@@ -12,6 +12,7 @@ import pytest
 
 from riskengine.api import main
 from riskengine.db import application_writes as writes
+from riskengine.db.application_transactions import TransactionError, TransactionExecutor
 from riskengine.db.connection import get_read_only_connection
 from riskengine.db.lifecycle import adopt_database, create_database
 from riskengine.db.schema.loader import create_schema
@@ -172,6 +173,13 @@ sys.stdin.buffer.read(1)
     assert failure.value.reason == "recovery_required"
     assert failure.value.__cause__.sqlite_errorcode == sqlite3.SQLITE_READONLY_ROLLBACK
     assert str(managed) not in str(failure.value)
+    assert managed.read_bytes() == database_bytes
+    assert journal.read_bytes() == journal_bytes
+    with pytest.raises(TransactionError) as transaction_failure:
+        TransactionExecutor(boundary).run(lambda tx: pytest.fail("Recovery must prevent callbacks"))
+    assert (transaction_failure.value.reason, transaction_failure.value.outcome) == (
+        "recovery_required", "not_started",
+    )
     assert managed.read_bytes() == database_bytes
     assert journal.read_bytes() == journal_bytes
 
@@ -365,16 +373,22 @@ def test_lifespan_fixes_effective_selection(managed, monkeypatch, demo, legacy):
 
     async def check():
         async with main.lifespan(main.app):
-            boundary = main.app.state.database_writes
-            assert boundary.selected == main.app.state.database.path
+            executor = main.app.state.database_transactions
+            assert not hasattr(main.app.state, "database_writes")
             monkeypatch.delenv("RISKENGINE_WRITE_DATA_ROOT")
             monkeypatch.setenv("RISKENGINE_DB", str(managed.parent / "different.db"))
             if demo or legacy:
-                denied(boundary, "demo" if demo else "operating_mode")
+                with pytest.raises(TransactionError) as failure:
+                    executor.run(lambda tx: pytest.fail("Denied callback ran"))
+                assert failure.value.reason == "authorization_denied"
+                assert failure.value.__cause__.reason == ("demo" if demo else "operating_mode")
             else:
-                with boundary.connect() as connection:
-                    assert Path(connection.execute("PRAGMA database_list").fetchone()[2]) == managed
-        assert main.app.state.database_writes is None
+                assert main.app.state.database.path == managed
+                executor.run(lambda tx: tx.execute("INSERT INTO portfolios VALUES (1, 'Selected', 'USD')"))
+                with closing(get_read_only_connection(managed)) as connection:
+                    assert connection.execute("SELECT name FROM portfolios").fetchall() == [("Selected",)]
+                assert not (managed.parent / "different.db").exists()
+        assert main.app.state.database_transactions is None
 
     asyncio.run(check())
 
@@ -389,6 +403,6 @@ def test_invalid_protected_startup_does_not_install_boundary(managed, monkeypatc
         with pytest.raises(RuntimeError, match="local session configuration"):
             async with main.lifespan(main.app):
                 pytest.fail("Invalid protected configuration started the app")
-        assert getattr(main.app.state, "database_writes", None) is None
+        assert getattr(main.app.state, "database_transactions", None) is None
 
     asyncio.run(check())
