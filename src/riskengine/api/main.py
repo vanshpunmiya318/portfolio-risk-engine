@@ -28,17 +28,25 @@ from riskengine.risk.performance_service import (
     get_risk_response, validate_risk_request,
 )
 from riskengine.api.holdings_models import HoldingsResponse
-from riskengine.api.local_access import SESSION_PATH, deny, load_local_access
+from riskengine.api.local_access import LocalAccess, SESSION_PATH, deny, load_local_access
 from riskengine.risk.holdings_service import (
     get_holdings_summary, PortfolioNotFound, HoldingsInputError, HoldingsDataConflict,
 )
 
-from riskengine.db.connection import get_connection
+from riskengine.db.application_writes import ApplicationWrites
+from riskengine.db.connection import get_read_only_connection
 from riskengine.db.portfolios import MissingHistoricalPriceError, get_total_portfolio_equity
 from riskengine.db.transactions import get_net_cash_flows, has_portfolio_currency_conflict
 
 ROOT = Path(__file__).resolve().parents[3]
 logger = logging.getLogger("uvicorn.error")
+
+
+def get_connection(db_path: Path, *, read_only: Literal[True]) -> sqlite3.Connection:
+    """Keep the API's existing connection entry point restricted to reads."""
+    if read_only is not True:
+        raise ValueError("Use the application write boundary for writable connections.")
+    return get_read_only_connection(db_path)
 
 
 @dataclass(frozen=True)
@@ -65,9 +73,15 @@ def select_database() -> DatabaseSelection:
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     previous_access = getattr(application.state, "local_access", None)
-    application.state.local_access = load_local_access()
+    previous_writes = getattr(application.state, "database_writes", None)
+    access = load_local_access()
     selection = select_database()
+    application.state.local_access = access
     application.state.database = selection
+    application.state.database_writes = ApplicationWrites(
+        selection.path, selection.mode, protected=isinstance(access, LocalAccess),
+        data_root=os.environ.get("RISKENGINE_WRITE_DATA_ROOT"),
+    )
     logger.info(
         "Portfolio API module=%s database=%s mode=%s access=read-only",
         Path(__file__).resolve(), selection.path, selection.mode,
@@ -76,6 +90,7 @@ async def lifespan(application: FastAPI):
         yield
     finally:
         application.state.local_access = previous_access
+        application.state.database_writes = previous_writes
 
 
 class PortfolioAPI(FastAPI):

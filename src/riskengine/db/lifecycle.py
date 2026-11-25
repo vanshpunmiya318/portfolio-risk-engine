@@ -69,11 +69,7 @@ def _schema_objects(connection: sqlite3.Connection) -> list[tuple]:
     ).fetchall()
 
 
-def _validate(connection: sqlite3.Connection) -> int:
-    version = connection.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, SCHEMA_VERSION):
-        raise DatabaseLifecycleError(f"Unsupported schema version {version}. Use a compatible V1 database.")
-
+def validate_structure(connection: sqlite3.Connection) -> None:
     with closing(sqlite3.connect(":memory:")) as reference:
         reference.executescript(schema_sql())
         expected = _schema_objects(reference)
@@ -86,6 +82,13 @@ def _validate(connection: sqlite3.Connection) -> int:
             if expected_objects.get((kind, name)) != actual_objects.get((kind, name))
         )
         raise DatabaseLifecycleError("Incompatible database schema: " + ", ".join(differences))
+
+
+def _validate(connection: sqlite3.Connection) -> int:
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version not in (0, SCHEMA_VERSION):
+        raise DatabaseLifecycleError(f"Unsupported schema version {version}. Use a compatible V1 database.")
+    validate_structure(connection)
     if connection.execute("PRAGMA integrity_check(1)").fetchone() != ("ok",):
         raise DatabaseLifecycleError("SQLite integrity check failed. Use a verified backup.")
     if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:

@@ -224,6 +224,68 @@ resets when backup makes progress, and individual SQLite calls can take addition
 An abrupt interruption can leave an unpublished `.portfolio-setup-*.db` file. The next attempt uses
 a new temporary filename. If cleanup fails, setup reports the retained path.
 
+### Opt in to managed write access for development
+
+A protected browser session authorizes API requests. The backend separately decides whether
+its startup-selected database is eligible for writable connections. For a database provisioned
+with `create` or `adopt`, use the following Windows CMD configuration:
+
+```cmd
+set "RISKENGINE_DEMO="
+set "RISKENGINE_API_MODE="
+set "RISKENGINE_DB=%LOCALAPPDATA%\Portfolio Risk Engine\portfolio.db"
+set "RISKENGINE_WRITE_DATA_ROOT=default"
+dev.cmd
+```
+
+For an isolated managed directory created with `--data-root`, set
+`RISKENGINE_WRITE_DATA_ROOT` to that same absolute local directory and
+`RISKENGINE_DB` to its `portfolio.db`. Clear the write opt-in with
+`set "RISKENGINE_WRITE_DATA_ROOT="`. These are developer settings. There are currently no
+financial editing endpoints.
+
+Demo selection still takes precedence, followed by the explicit database override and the
+historical default. Writable access requires protected mode and a match between the effective
+explicit database and the opted-in managed path. Demo, historical default, and legacy-read-only
+operation stay read-only. An arbitrary explicit database remains readable under the existing API
+rules. Schema version 1 and matching table and index definitions establish compatibility.
+The trusted startup opt-in authorizes the location. Startup creates and adopts no databases.
+
+The boundary reuses the managed directory rules outside the repository, checks resolved paths,
+and rejects links or unreliable identity on the target and its SQLite sidecars. Windows path
+comparison follows Windows case rules. A directory alias resolving inside the repository still
+fails the managed directory check. Authorization applies to the configured location, so a
+compatible replacement at that location can be accepted between opens. Pathname identity
+checks around opening do not pin the startup file. Keep the active database in place while
+the application is running. Supported restore and replacement workflows belong to Phase 2.4.
+The boundary assumes the OS user trusts other processes that can change their files and does not
+sandbox developer scripts, Streamlit writers, ingestion jobs, or external SQLite tools.
+
+Phase 2.3C callers should use `app.state.database_writes.connect()` after request authorization.
+This context manager opens an existing file with SQLite URI `mode=rw`, checks the schema and
+identity, and closes the connection on exit. Each connection verifies foreign-key enforcement,
+uses a two-second SQLite busy timeout and leaves persistent journal mode alone. Statements run
+in SQLite autocommit mode until the caller explicitly begins a transaction. Phase 2.3C will
+own transaction scopes, rollback policy and serialization. The connection boundary checks
+structure on open. The lifecycle `inspect` command also checks existing data integrity.
+
+The file permission check and successful SQLite initialization establish prerequisites for
+writing. A statement can still fail because of directory permissions, journal creation,
+contention, disk conditions or other runtime errors. The timeout applies to SQLite lock
+contention, with no overall deadline for a connection or transaction. Phase 2.3C must handle
+statement failures inside explicit transaction scopes.
+
+If SQLite reports that rollback journal recovery is required during read-only validation,
+the connection boundary refuses writable access and leaves the database and journal intact.
+Keep both files together and arrange controlled SQLite recovery before retrying. The application
+does not recover journals automatically. A non-hot rollback journal and ordinary WAL sidecars
+can remain usable.
+
+Run the write-boundary tests with
+`.venv\Scripts\python.exe -m pytest tests\test_application_writes.py -q`.
+If overriding pytest's temporary root, use a unique disposable directory outside the repository.
+Pytest can retain an explicit `--basetemp` between runs. Clean up only artifacts owned by that run.
+
 ### Run Tests
 
 ```cmd

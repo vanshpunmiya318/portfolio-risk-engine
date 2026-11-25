@@ -2,6 +2,10 @@ import sqlite3
 from pathlib import Path
 
 
+def get_read_only_connection(db_path: str | Path) -> sqlite3.Connection:
+    return get_connection(db_path, read_only=True)
+
+
 def get_connection(
     db_path: str | Path,
     *,
