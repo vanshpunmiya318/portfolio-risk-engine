@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 import { analysisValidation, errorDetails, isCalendarDate } from './performance';
 
 export interface AllocationIssue { code: string; message: string; scope: 'current' | 'reference' | 'target'; ticker: string | null }
@@ -64,7 +66,7 @@ export class AllocationRequestError extends Error {
 export async function getPortfolioAllocation(id: number, asOfDate: string | undefined, signal: AbortSignal): Promise<AllocationResponse> {
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Configure a positive integer portfolio ID.');
   const params = allocationQuery(asOfDate);
-  const response = await fetch(`/api/portfolios/${id}/allocation${params ? `?${params}` : ''}`, {
+  const response = await apiFetch(`/api/portfolios/${id}/allocation${params ? `?${params}` : ''}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' },
   });
   const body: unknown = await response.json().catch(() => null);

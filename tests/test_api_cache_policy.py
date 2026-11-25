@@ -131,6 +131,7 @@ def test_liveness_and_readiness_unchanged(portfolio_db):
 @pytest.mark.parametrize("path", ["/assets/app.css", "/api/portfolios-assets/app.css"])
 def test_static_responses_keep_existing_cache_policy(path):
     app = main.PortfolioAPI()
+    app.state.local_access = False  # Isolated legacy read-contract fixture without lifespan.
     css = b"body { margin: 0; }"
 
     @app.get(path)

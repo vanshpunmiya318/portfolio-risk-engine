@@ -66,13 +66,52 @@ test('Windows dev.cmd database readiness and cleanup', { skip: process.platform 
     });
   }
   symlinkSync(join(root, '.venv'), join(project, '.venv'), 'junction');
+  const copiedLauncher = join(project, 'scripts', 'dev.mjs');
+  const sourceLauncher = readFileSync(copiedLauncher, 'utf8');
+  const normalConfirmation = 'JSON.stringify(`browser-ready:${token}`)';
+  assert.ok(sourceLauncher.includes(normalConfirmation));
+  writeFileSync(copiedLauncher, sourceLauncher.replace(normalConfirmation,
+    'JSON.stringify(process.env.LAUNCHER_TEST_WRONG_GENERATION === "1" ? "browser-ready:wrong-startup" : `browser-ready:${token}`)'));
+
+  // Substitute only Windows shell dispatch. Exchange and confirmation still
+  // go through the real HTTP proxy, backend session checks and control socket.
+  const opener = join(project, 'fixture-browser.cjs');
+  const bridge = join(project, 'fixture-browser-bridge.cjs');
+  writeFileSync(bridge, `
+const cp = require('node:child_process');
+const spawn = cp.spawn;
+cp.spawn = (file, args, options) => file === 'rundll32.exe'
+  ? spawn(process.execPath, [process.env.LAUNCHER_TEST_OPENER, args[1]], options)
+  : spawn(file, args, options);
+require('node:module').syncBuiltinESMExports();
+`);
+  writeFileSync(opener, `
+(async () => {
+  const mode = process.env.LAUNCHER_TEST_BROWSER_MODE;
+  if (mode === 'dispatch-error') return process.exitCode = 1;
+  const url = new URL(process.argv[2]);
+  const endpoint = url.origin + '/api/local-session';
+  const response = await fetch(endpoint, {
+    method: 'POST', headers: { Origin: url.origin, 'X-RiskEngine-Bootstrap': url.hash.slice(8) },
+    signal: AbortSignal.timeout(3000),
+  });
+  if (response.status !== 204) return process.exitCode = 1;
+  if (mode === 'exchange-only') return;
+  const check = await fetch(endpoint, {
+    headers: { Cookie: response.headers.get('set-cookie').split(';', 1)[0] },
+    signal: AbortSignal.timeout(3000),
+  });
+  if (check.status !== 200 || !(await check.json()).generation) process.exitCode = 1;
+})().catch(() => { process.exitCode = 1; });
+`);
 
   const healthy = join(project, 'healthy.db');
   const empty = join(project, 'empty.db');
   const missing = join(project, 'missing.db');
   const malformed = join(project, 'malformed.db');
   writeFileSync(malformed, 'not a SQLite database');
-  const env = { ...process.env, PYTHONPATH: join(project, 'src'), RISKENGINE_DEMO: '0' };
+  const env = { ...process.env, PYTHONPATH: join(project, 'src'), RISKENGINE_DEMO: '0',
+    LAUNCHER_TEST_OPENER: opener, NODE_OPTIONS: `--require "${bridge.replaceAll('\\', '/')}"` };
   execFileSync(join(project, '.venv', 'Scripts', 'python.exe'), ['-B', '-c', [
     'import sqlite3, sys',
     'from contextlib import closing',
@@ -186,6 +225,10 @@ if timeout_mode := os.environ.get("LAUNCHER_TEST_TIMEOUT"):
     assert.match(run.output, /Ready: http/, run.output);
     if (expectedMode) assert.match(run.output, new RegExp(`mode=${expectedMode} access=read-only`));
     assert.equal(existsSync(lock), true);
+    const unauthenticated = await fetch(`http://127.0.0.1:${vitePort}/api/portfolios/1/summary`, { signal: AbortSignal.timeout(3000) });
+    assert.equal(unauthenticated.status, 401);
+    assert.equal(unauthenticated.headers.get('cache-control'), 'no-store');
+    await unauthenticated.arrayBuffer();
     for (const [port, route] of [[apiPort, '/ready'], [vitePort, '/holdings']]) {
       const response = await fetch(`http://127.0.0.1:${port}${route}`, { signal: AbortSignal.timeout(3000) });
       assert.equal(response.status, 200);
@@ -203,6 +246,28 @@ if timeout_mode := os.environ.get("LAUNCHER_TEST_TIMEOUT"):
   });
   await t.test('valid empty database starts and shuts down cleanly', async () => {
     await startsAndStops(empty);
+  });
+
+  await t.test('successful dispatch and exchange without cookie confirmation time out and permit restart', async () => {
+    const run = start(healthy, { LAUNCHER_TEST_BROWSER_MODE: 'exchange-only' });
+    await stopped(run, 1);
+    assert.match(run.output, /Browser authorization was not confirmed within 30 seconds/);
+    assert.doesNotMatch(run.output, /Ready: http/);
+    await startsAndStops(healthy);
+  });
+
+  await t.test('browser dispatch failure stops both listeners before Ready', async () => {
+    const run = start(healthy, { LAUNCHER_TEST_BROWSER_MODE: 'dispatch-error' });
+    await stopped(run, 1);
+    assert.match(run.output, /Could not open the browser/);
+    assert.doesNotMatch(run.output, /Ready: http/);
+  });
+
+  await t.test('confirmation with an incorrect generation never satisfies readiness', async () => {
+    const run = start(healthy, { LAUNCHER_TEST_WRONG_GENERATION: '1' });
+    await stopped(run, 1);
+    assert.match(run.output, /Browser authorization was not confirmed within 30 seconds/);
+    assert.doesNotMatch(run.output, /Ready: http/);
   });
 
   for (const mode of ['no-listener', 'stalled', 'exits-during-cleanup']) {

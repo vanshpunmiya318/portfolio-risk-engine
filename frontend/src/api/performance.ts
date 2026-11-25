@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 export interface AnalysisMessage {
   code: string; message: string; scope: string; category: string;
   metric: string | null; start_date: string | null; end_date: string | null; ticker: string | null;
@@ -136,7 +138,7 @@ export function errorDetails(body: unknown): string[] {
 export async function getPortfolioPerformance(portfolioId: number, query: PerformanceQuery, signal: AbortSignal): Promise<PerformanceResponse> {
   if (!Number.isSafeInteger(portfolioId) || portfolioId <= 0) throw new Error('Configure a positive integer portfolio ID.');
   const params = performanceQuery(query);
-  const response = await fetch(`/api/portfolios/${portfolioId}/performance${params ? `?${params}` : ''}`, {
+  const response = await apiFetch(`/api/portfolios/${portfolioId}/performance${params ? `?${params}` : ''}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' },
   });
   const body: unknown = await response.json().catch(() => null);

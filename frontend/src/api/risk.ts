@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 import { isAnalysisResponse, analysisValidation, performanceQuery, errorDetails, isCalendarDate } from './performance';
 import type { AnalysisResponse, MetricValue, ChartSeries, PerformanceQuery } from './performance';
 
@@ -36,7 +38,7 @@ export class RiskRequestError extends Error {
 export async function getPortfolioRisk(id: number, query: RiskQuery, signal: AbortSignal): Promise<RiskResponse> {
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Configure a positive integer portfolio ID.');
   const params = riskQuery(query);
-  const response = await fetch(`/api/portfolios/${id}/risk${params ? `?${params}` : ''}`, {
+  const response = await apiFetch(`/api/portfolios/${id}/risk${params ? `?${params}` : ''}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' },
   });
   const body: unknown = await response.json().catch(() => null);

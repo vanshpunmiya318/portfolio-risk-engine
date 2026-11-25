@@ -28,6 +28,7 @@ from riskengine.risk.performance_service import (
     get_risk_response, validate_risk_request,
 )
 from riskengine.api.holdings_models import HoldingsResponse
+from riskengine.api.local_access import SESSION_PATH, deny, load_local_access
 from riskengine.risk.holdings_service import (
     get_holdings_summary, PortfolioNotFound, HoldingsInputError, HoldingsDataConflict,
 )
@@ -63,13 +64,18 @@ def select_database() -> DatabaseSelection:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    previous_access = getattr(application.state, "local_access", None)
+    application.state.local_access = load_local_access()
     selection = select_database()
     application.state.database = selection
     logger.info(
         "Portfolio API module=%s database=%s mode=%s access=read-only",
         Path(__file__).resolve(), selection.path, selection.mode,
     )
-    yield
+    try:
+        yield
+    finally:
+        application.state.local_access = previous_access
 
 
 class PortfolioAPI(FastAPI):
@@ -82,15 +88,35 @@ class PortfolioAPI(FastAPI):
         root_path = scope.get("root_path", "").rstrip("/")
         if root_path and path.startswith(root_path + "/"):
             path = path[len(root_path):]
-        if not (path + "/").startswith(("/api/portfolio/", "/api/portfolios/")):
+        access = getattr(self.state, "local_access", None)
+        if access is None:
+            await deny(503, "Local API is not initialized. Start with dev.cmd.")(scope, receive, send)
+            return
+        if access is not False:
+            local_request = Request(scope)
+            rejection = access.guard(local_request, path)
+            if rejection is not None:
+                await rejection(scope, receive, send)
+                return
+        elif scope["method"] not in {"GET", "HEAD"}:
+            await deny(403, "Legacy API mode is read-only.")(scope, receive, send)
+            return
+        cache_prefixes = ("/api/",) if access is not False else ("/api/portfolio/", "/api/portfolios/")
+        if path != SESSION_PATH and not (path + "/").startswith(cache_prefixes):
             await super().__call__(scope, receive, send)
             return
 
         # Wrap the ASGI send outside FastAPI's error middleware so generated 500s are covered.
+        successful = False
+
         async def send_no_store(message: Message) -> None:
+            nonlocal successful
             if message["type"] == "http.response.start":
                 MutableHeaders(scope=message)["Cache-Control"] = "no-store"
+                successful = message["status"] == 200
             await send(message)
+            if access is not False and successful and message["type"] == "http.response.body" and not message.get("more_body"):
+                access.confirm_browser(local_request, path)
 
         await super().__call__(scope, receive, send_no_store)
 
@@ -100,6 +126,12 @@ app = PortfolioAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.get(SESSION_PATH)
+def local_session(request: Request):
+    access = getattr(request.app.state, "local_access", False)
+    return {"generation": access.generation if access else "legacy-read-only"}
 
 
 @app.get("/api/portfolios/{portfolio_id}/report", response_model=ReportResponse)

@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 import { analysisValidation, errorDetails, isAnalysisResponse, isCalendarDate } from './performance';
 import type { AnalysisMessage, AnalysisPeriod, MetricValue, PerformanceResponse } from './performance';
 import type { RiskResponse } from './risk';
@@ -110,7 +112,7 @@ async function responseText(response: Response): Promise<string> {
 export async function getPortfolioReport({ id, query }: ReportRequest, signal: AbortSignal): Promise<ReportArtifact> {
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error('Configure a positive integer portfolio ID.');
   const applied = Object.freeze({ ...query });
-  const response = await fetch(`/api/portfolios/${id}/report?${reportQuery(applied)}`, {
+  const response = await apiFetch(`/api/portfolios/${id}/report?${reportQuery(applied)}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' },
   });
   const jsonText = await responseText(response);
@@ -123,7 +125,7 @@ export async function getPortfolioReport({ id, query }: ReportRequest, signal: A
 }
 export async function getReportMarkdown(artifact: ReportArtifact, signal: AbortSignal): Promise<MarkdownArtifact> {
   const params = new URLSearchParams(reportQuery(artifact.query)); params.set('format', 'markdown');
-  const response = await fetch(`/api/portfolios/${artifact.id}/report/export?${params}`, {
+  const response = await apiFetch(`/api/portfolios/${artifact.id}/report/export?${params}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'text/markdown' },
   });
   const content = await responseText(response);

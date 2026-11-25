@@ -397,3 +397,35 @@ test('unavailable and incomplete holdings have different messages from a validat
   d.allocation = null; html = renderToStaticMarkup(createElement(page.ReportContent, { data: d }));
   assert.ok(html.includes('Allocation unavailable'));
 });
+
+test('session loss discards pending report preview and download bodies even if delivery ignores abort', async () => {
+  const session = await server.ssrLoadModule('/src/api/localSession.ts');
+  session.protectLocalSessionRequests();
+  const pending = [];
+  const received = [];
+  const errors = [];
+  globalThis.fetch = (_url, options) => Promise.resolve({
+    ok: true, status: 200, headers: new Headers({ 'Content-Type': 'text/markdown' }),
+    text: () => new Promise(resolve => pending.push({ resolve, signal: options.signal })),
+  });
+  const preview = api.createReportLoader();
+  const markdown = api.createMarkdownLoader();
+  const unsubscribe = session.onSessionLost(() => { preview.cancel(); markdown.cancel(); });
+  try {
+    const tasks = [
+      preview.load({ id: 1, query }, value => received.push(value), error => errors.push(error)),
+      markdown.load(artifact(), value => received.push(value), error => errors.push(error)),
+    ];
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(pending.length, 2);
+    session.invalidateLocalSession();
+    assert.ok(pending.every(body => body.signal.aborted));
+    pending[0].resolve(JSON.stringify(clone()));
+    pending[1].resolve('# Private report');
+    await Promise.all(tasks);
+    assert.deepEqual(received, []);
+    assert.deepEqual(errors, []);
+  } finally {
+    unsubscribe();
+  }
+});

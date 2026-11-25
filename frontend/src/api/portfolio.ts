@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 export interface PortfolioSummary {
   portfolio_id: number;
   name: string;
@@ -25,7 +27,7 @@ function isSummary(value: unknown): value is PortfolioSummary {
 
 export async function getPortfolioSummary(signal: AbortSignal, portfolioId = 1): Promise<PortfolioSummary | null> {
   if (!Number.isSafeInteger(portfolioId) || portfolioId <= 0) throw new Error('Configure a positive integer portfolio ID.');
-  const response = await fetch(`/api/portfolios/${portfolioId}/summary`, {
+  const response = await apiFetch(`/api/portfolios/${portfolioId}/summary`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
     headers: { Accept: 'application/json' },
   });
@@ -114,7 +116,7 @@ export function isHoldings(value: unknown): value is HoldingsResponse {
 
 export async function getPortfolioHoldings(portfolioId: number, signal: AbortSignal): Promise<HoldingsResponse> {
   if (!Number.isSafeInteger(portfolioId) || portfolioId <= 0) throw new Error('Configure a positive integer portfolio ID.');
-  const response = await fetch(`/api/portfolios/${portfolioId}/holdings`, {
+  const response = await apiFetch(`/api/portfolios/${portfolioId}/holdings`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]), headers: { Accept: 'application/json' },
   });
   if (!response.ok) {

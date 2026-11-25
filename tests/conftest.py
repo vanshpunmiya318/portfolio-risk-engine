@@ -2,6 +2,14 @@ import pytest
 
 from riskengine.db.connection import get_connection
 
+@pytest.fixture(autouse=True)
+def legacy_read_contract(monkeypatch):
+    from riskengine.api.main import app
+
+    # These unit tests can dispatch directly without ASGI lifespan.
+    monkeypatch.setenv("RISKENGINE_API_MODE", "legacy-read-only")
+    monkeypatch.setattr(app.state, "local_access", False, raising=False)
+
 
 @pytest.fixture
 def db_connection():

@@ -3,7 +3,7 @@ import { spawn, fork } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, closeSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { createServer as createTcpServer, createConnection } from 'node:net';
 import { createInterface } from 'node:readline';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -12,6 +12,7 @@ const root = dirname(dirname(script));
 const frontend = join(root, 'frontend');
 const apiPort = Number(process.env.RISKENGINE_API_PORT ?? '8000');
 const vitePort = Number(process.env.RISKENGINE_VITE_PORT ?? '5173');
+const browserConfirmationMs = 30_000;
 
 if (process.argv.includes('--vite-child')) {
   let server;
@@ -28,9 +29,27 @@ if (process.argv.includes('--vite-child')) {
   process.on('SIGTERM', () => void stop());
   try {
     const { createServer } = await import(pathToFileURL(join(frontend, 'node_modules/vite/dist/node/index.js')).href);
+    const browserHost = `127.0.0.1:${vitePort}`;
     server = await createServer({ root: frontend, configFile: join(frontend, 'vite.config.ts'),
+      plugins: [{
+        name: 'riskengine-local-host',
+        configureServer(vite) {
+          vite.middlewares.use((request, response, next) => {
+            const hosts = request.headersDistinct.host;
+            if (hosts?.length !== 1 || hosts[0] !== browserHost
+                || 'forwarded' in request.headers || 'x-forwarded-host' in request.headers) {
+              response.writeHead(400, { 'Cache-Control': 'no-store' }).end('Invalid local request host.');
+              return;
+            }
+            next();
+          });
+        },
+      }],
       server: { host: '127.0.0.1', port: vitePort, strictPort: true,
-        proxy: { '/api': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: true } } } });
+        cors: false, fs: { allow: [frontend] },
+        headers: { 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
+          'Content-Security-Policy': "frame-ancestors 'none'" },
+        proxy: { '/api': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false } } } });
     await server.listen();
     process.send?.({ type: 'ready' });
   } catch (error) {
@@ -178,17 +197,27 @@ async function run() {
     // A private startup handshake identifies our API process without trusting
     // an unrelated health response or buffered Windows launcher stdout.
     let apiReady = false;
+    let browserConfirmedAt = Infinity;
     const token = randomUUID();
     readinessServer = createTcpServer((socket) => {
       let message = '';
       socket.setTimeout(1000, () => socket.destroy());
       socket.on('data', (chunk) => {
         message += chunk.toString();
-        if (message === token + '\n') {
-          apiReady = true;
-          apiControlSocket = socket;
-          socket.setTimeout(0);
-          readinessServer.close();
+        if (message.length > 128) return socket.destroy();
+        for (let newline = message.indexOf('\n'); newline !== -1; newline = message.indexOf('\n')) {
+          const line = message.slice(0, newline);
+          message = message.slice(newline + 1);
+          if (!apiControlSocket && line === token) {
+            apiReady = true;
+            apiControlSocket = socket;
+            socket.setTimeout(0);
+            readinessServer.close();
+          } else if (socket === apiControlSocket && line.startsWith('browser-ready:')) {
+            if (line === `browser-ready:${token}`) browserConfirmedAt = Math.min(browserConfirmedAt, performance.now());
+          } else {
+            return socket.destroy();
+          }
         }
       });
       socket.on('error', () => socket.destroy());
@@ -210,6 +239,17 @@ async function run() {
       '        finally:',
       '            self.should_exit = True',
       '            writer.close()',
+      '    async def notify_browser(self, writer):',
+      '        from riskengine.api.main import app',
+      '        access = getattr(app.state, "local_access", None)',
+      '        if access:',
+      '            await access.browser_confirmed.wait()',
+      '            if not writer.is_closing():',
+      '                try:',
+      `                    writer.write((${JSON.stringify(`browser-ready:${token}`)} + "\\n").encode())`,
+      '                    await writer.drain()',
+      '                except ConnectionError:',
+      '                    pass',
       '    async def startup(self, sockets=None):',
       '        await super().startup(sockets)',
       '        if self.started:',
@@ -217,11 +257,15 @@ async function run() {
       `            writer.write((${JSON.stringify(token)} + "\\n").encode())`,
       '            await writer.drain()',
       '            self.control_task = asyncio.create_task(self.watch_control(reader, writer))',
-      `server = DevServer(uvicorn.Config("riskengine.api.main:app", host="127.0.0.1", port=${apiPort}))`,
+      '            self.browser_task = asyncio.create_task(self.notify_browser(writer))',
+      `server = DevServer(uvicorn.Config("riskengine.api.main:app", host="127.0.0.1", port=${apiPort}, proxy_headers=False, access_log=False))`,
       'server.run()',
     ].join('\n');
+    const bootstrap = randomBytes(32).toString('base64url');
     const api = watch(spawn(python, ['-B', '-u', '-c', pythonCode], {
       cwd: root, windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'],
+      env: { ...process.env, RISKENGINE_API_MODE: 'protected', RISKENGINE_API_PORT: String(apiPort),
+        RISKENGINE_VITE_PORT: String(vitePort), RISKENGINE_BOOTSTRAP_CODE: bootstrap },
     }), 'FastAPI');
     const deadline = Date.now() + 30000;
     const readinessUrl = `http://127.0.0.1:${apiPort}/ready`;
@@ -257,6 +301,46 @@ async function run() {
       vite.once('exit', () => { clearTimeout(timer); reject(new Error('Vite failed during startup.')); });
     });
     if (stopping) return;
+    const origin = `http://127.0.0.1:${vitePort}`;
+    const page = await fetch(`${origin}/holdings`, { redirect: 'manual', signal: AbortSignal.timeout(3000) });
+    await page.body?.cancel();
+    if (page.status !== 200 || !page.headers.get('content-type')?.startsWith('text/html')) {
+      throw new Error('The local browser application could not be loaded.');
+    }
+    const probe = await fetch(`${origin}/api/local-session`, {
+      method: 'HEAD', headers: { Origin: origin, 'X-RiskEngine-Bootstrap': bootstrap },
+      redirect: 'manual', signal: AbortSignal.timeout(3000),
+    });
+    if (stopping) return;
+    if (probe.status !== 204) throw new Error('The protected browser session could not be initialized.');
+    const browserDeadline = performance.now() + browserConfirmationMs;
+    await new Promise((resolve, reject) => {
+      // Only the short-lived, single-use code is carried in navigation state.
+      const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', `${origin}/holdings#launch=${bootstrap}`], {
+        windowsHide: true, stdio: 'ignore', detached: true,
+      });
+      const dispatchFailure = () => reject(new Error('Could not open the browser. Restart dev.cmd and check the Windows default browser.'));
+      const timer = setTimeout(() => {
+        browser.kill();
+        dispatchFailure();
+      }, 5000);
+      browser.once('error', () => {
+        clearTimeout(timer);
+        dispatchFailure();
+      });
+      browser.once('exit', code => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else dispatchFailure();
+      });
+    });
+    while (!stopping && browserConfirmedAt > browserDeadline && performance.now() < browserDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (stopping) return;
+    if (browserConfirmedAt > browserDeadline) {
+      throw new Error('Browser authorization was not confirmed within 30 seconds. Check that the browser opened, allows cookies for this local site, and completed session initialization. Restart dev.cmd and use the tab it opens.');
+    }
     console.log(`\nReady: http://127.0.0.1:${vitePort}/holdings\nFastAPI: http://127.0.0.1:${apiPort}\nPress Ctrl+C or type stop then Enter to shut down both servers.`);
   } catch (error) {
     if (stopping) return;

@@ -1,3 +1,5 @@
+import { apiFetch } from './localSession.ts';
+
 import { errorDetails } from './performance';
 export interface HistoryIssue { code: string; message: string }
 interface RecordedRow { id: number; date: string; currency: string; source: string; issues: HistoryIssue[] }
@@ -21,7 +23,7 @@ export class TransactionsRequestError extends Error {
 }
 export async function getTransactions(portfolioId: number, signal: AbortSignal): Promise<TransactionsResponse> {
   if (!Number.isSafeInteger(portfolioId) || portfolioId <= 0) throw new Error('Configure a positive integer portfolio ID.');
-  const response = await fetch(`/api/portfolios/${portfolioId}/transactions`, { signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' } });
+  const response = await apiFetch(`/api/portfolios/${portfolioId}/transactions`, { signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]), headers: { Accept: 'application/json' } });
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) throw new TransactionsRequestError(response.status, errorDetails(body));
   if (!isTransactionsResponse(body) || body.portfolio_id !== portfolioId) throw new Error('The API returned invalid or mismatched Transactions data.');

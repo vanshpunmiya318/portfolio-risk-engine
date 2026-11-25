@@ -1,5 +1,6 @@
 import { TableScroll } from '../components/TableScroll';
 import { useEffect, useRef, useState } from 'react';
+import { onSessionLost } from '../api/localSession';
 import type { ReactNode } from 'react';
 import { createMarkdownLoader, createReportLoader, draftQuery, hasDraftChanges, initialReportDraft, ReportRequestError } from '../api/reports';
 import type { MetricValue, ReportAmount, ReportArtifact, ReportQuery, ReportResponse } from '../api/reports';
@@ -203,7 +204,9 @@ export function Reports({ portfolioId = 1 }: { portfolioId?: number }) {
     const requests = loaders.current!;
     setState({ status: 'loading' }); setMarkdown({ status: 'idle' }); setJsonError('');
     void requests.preview.load({ id: portfolioId, query: applied }, result => setState({ status: 'ready', artifact: result }), error => setState({ status: 'error', message: errorMessage(error), details: error instanceof ReportRequestError ? error.details : [] }));
-    return () => { requests.preview.cancel(); requests.markdown.cancel(); };
+    const cancel = () => { requests.preview.cancel(); requests.markdown.cancel(); };
+    const unsubscribe = onSessionLost(() => { activeArtifact.current = null; cancel(); });
+    return () => { unsubscribe(); cancel(); };
   }, [portfolioId, applied, attempt]);
   function invalidate() { loaders.current!.preview.cancel(); loaders.current!.markdown.cancel(); activeArtifact.current = null; setState({ status: 'loading' }); setMarkdown({ status: 'idle' }); setJsonError(''); }
   function apply() {

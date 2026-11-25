@@ -126,7 +126,10 @@ set "VITE_PORTFOLIO_ID=1"
 dev.cmd
 ```
 
-Open http://127.0.0.1:5173/holdings once the launcher prints `Ready`.
+Use the browser tab opened by `dev.cmd`. Before printing `Ready`, the launcher verifies database
+readiness and waits for the current browser session to return its cookie in a successful
+authenticated session check. The backend confirms this on its private launcher connection.
+The displayed URL contains no launch code.
 While FastAPI is running, http://127.0.0.1:8000/health checks process liveness and
 http://127.0.0.1:8000/ready checks database access and required schema. If startup reports a database
 problem, check which file the environment selects and whether it exists, is readable, and has the
@@ -134,6 +137,51 @@ application schema. If a page reports a missing portfolio after startup, check t
 `VITE_PORTFOLIO_ID` exists in the selected database. An empty database can pass readiness.
 Type `stop` then Enter (or press Ctrl+C), wait for shutdown, and run `dev.cmd` again after changing settings.
 See the [frontend README](frontend/README.md) for the seven routes and port overrides.
+
+### Local access protection
+
+`dev.cmd` runs both listeners on IPv4 loopback. Use the exact `127.0.0.1` address and configured
+port. `localhost`, IPv6, other hosts and forwarded host overrides are rejected in protected mode.
+The Vite proxy preserves the original Host. The API checks that Host and any supplied Origin
+match the configured local access policy. Cross-site browser request metadata and null Origin
+are rejected. Missing Origin is allowed for authorized reads and local probes. Cross-origin
+requests receive no CORS grant.
+
+The launcher opens the browser with a random, single-use launch code in the URL fragment.
+It expires after three minutes and can be briefly visible in the Windows dispatch arguments and
+browser navigation state. The app removes the fragment before exchanging the code in a request
+header. The launcher does not print it. The backend issues an in-memory, host-only, HttpOnly,
+SameSite=Strict session cookie scoped to `/api`. Development uses loopback HTTP, so the cookie
+does not require HTTPS. A session lasts at most 12 hours and is invalidated on backend restart.
+Refresh and other tabs in the same browser profile can reuse it.
+
+Allow cookies for this local application and use the tab opened by `dev.cmd`. Browser authorization
+must be confirmed within 30 seconds of dispatch. If it fails, the launcher reports the problem and
+stops its servers. Check your browser's site-specific cookie settings and default browser setup,
+then run `dev.cmd` again. On session loss the app clears its financial views on the next failed
+request, focus check, or scheduled session check. Background tabs can delay the scheduled check.
+Refresh if a new launcher tab already established a session. Otherwise restart `dev.cmd`.
+
+All financial API routes, including report exports, require a valid session and use `no-store`.
+`/health` and `/ready` remain session-independent under the local Host and Origin rules.
+Interactive API docs and OpenAPI are hidden in protected mode. A future unsafe API request
+must use the exact browser Origin, a valid session, and the non-simple `X-RiskEngine-Request`
+header. There are no financial write endpoints.
+
+Protected startup fails if its launcher configuration is unavailable. An explicit
+`RISKENGINE_API_MODE=legacy-read-only` is available for isolated developer read-contract testing.
+It bypasses local access guards and refuses unsafe HTTP methods. Keep it on loopback with disposable
+data. The supported launcher always selects protected mode. The cookie and same-origin exchange
+can be reused with future same-origin asset serving. Production packaging is separate work.
+
+This protects against unrelated websites, cross-origin requests, CSRF, DNS rebinding, and direct
+requests without the session. The application does not isolate other processes running as the same
+OS user. Malware, a compromised browser or privileged extension, administrator access, and physical
+access to an unlocked device are outside this boundary. Different browser-facing ports use
+different cookie names, so legitimate instances with separate project directories and port pairs
+can run in one browser profile. Cookies are scoped by host and path. Their names prevent collisions
+between instances and do not provide confidentiality across TCP ports. A local process that owns
+another port on the same host is outside this threat model.
 
 ### Set up a managed database
 

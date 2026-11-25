@@ -12,12 +12,20 @@ cd /d D:\portfolio-risk-engine
 dev.cmd
 ```
 
-Open **http://127.0.0.1:5173/holdings**. FastAPI runs at `http://127.0.0.1:8000`; Vite forwards `/api` requests to it. Keep the terminal open. Type `stop` then Enter to shut down both servers, or press Ctrl+C. Typing `stop` avoids CMD's possible batch-termination prompt.
+Use the tab opened by the launcher at **http://127.0.0.1:5173/holdings**. FastAPI runs at
+`http://127.0.0.1:8000`, and Vite forwards `/api` requests while preserving Host.
+Keep the terminal open. Type `stop` then Enter to shut down both servers, or press Ctrl+C.
+Typing `stop` avoids CMD's possible batch-termination prompt.
 
 The launcher waits for FastAPI's `/ready` to return HTTP 200 before starting Vite. `/health` only checks
 process liveness. If startup fails because of the database, verify the file selected by
 `RISKENGINE_DEMO=1`, `RISKENGINE_DB`, or the default `data/historical_portfolio.db`, in that order.
 Run `dev.cmd` again after fixing the configuration or stopping a previous run.
+
+After database readiness, `Ready` also requires the browser to complete an authenticated session
+check with its issued cookie. If confirmation has not arrived within 30 seconds, the launcher stops
+both servers. Check the default browser and its cookie settings for the local site, then run
+`dev.cmd` again and use the tab it opens.
 
 The launcher uses `.venv\Scripts\python.exe`, Node/npm on PATH, and the existing `frontend/node_modules` installation. It does not install dependencies, activate a different environment, or change database selection. Install the project dependencies separately if they are missing. Run frontend-only commands from `frontend/`:
 
@@ -82,7 +90,11 @@ Holdings preserves nulls as "Unavailable", labels observed-price currencies and 
 
 `npm test` uses Node's built-in test runner and existing Vite/React packages, without additional dependencies. Tests require Node.js 22.18+ with native TypeScript support (tested on Node 26). They cover response validation, nulls, failures, formatting, chart geometry and server-rendered content; they do not replace browser interaction testing.
 
-For frontend-only development, start FastAPI separately on `127.0.0.1:8000`, then use `npm.cmd run dev`. Use `dev.cmd` (or `npm.cmd run dev:all` from `frontend/`) to manage both together instead.
+Use `dev.cmd` (or `npm.cmd run dev:all` from `frontend/`) for protected development. For
+isolated read-contract work with disposable data, explicitly set
+`RISKENGINE_API_MODE=legacy-read-only` before starting FastAPI separately on `127.0.0.1:8000`.
+Then run `npm.cmd run dev -- --host 127.0.0.1` from `frontend/`.
+See the [local access guide](../README.md#local-access-protection) for session recovery and limitations.
 
 With the Windows quickstart dependencies installed, run `node --test scripts/dev.test.mjs` from the
 repository root to test startup and cleanup with isolated databases and temporary ports.
