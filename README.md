@@ -257,7 +257,7 @@ comparison follows Windows case rules. A directory alias resolving inside the re
 fails the managed directory check. Authorization applies to the configured location, so a
 compatible replacement at that location can be accepted between opens. Pathname identity
 checks around opening do not pin the startup file. Keep the active database in place while
-the application is running. Supported restore and replacement workflows belong to Phase 2.4.
+the application is running. Use the offline maintenance workflow below.
 The boundary assumes the OS user trusts other processes that can change their files and does not
 sandbox developer scripts, Streamlit writers, ingestion jobs, or external SQLite tools.
 
@@ -273,7 +273,7 @@ contention, with no overall deadline for a connection or transaction.
 
 If SQLite reports that rollback journal recovery is required during read-only validation,
 the connection boundary refuses writable access and leaves the database and journal intact.
-Keep both files together and arrange controlled SQLite recovery before retrying. The application
+Keep both files together and use the controlled offline recovery workflow below. The application
 does not recover journals automatically. A non-hot rollback journal and ordinary WAL sidecars
 can remain usable.
 
@@ -308,9 +308,93 @@ reconciliation before any retry. Preserve the primary error and log secondary fa
 internally. Public error mapping must omit raw causes and financial data.
 
 These rules govern supported application callbacks. Same-user file manipulation and trusted
-process internals remain outside the boundary. Phase 2.4 will address backup, restore and
-controlled recovery. User-facing financial editing, domain-specific mutation services, public
+process internals remain outside the boundary. User-facing financial editing, domain-specific mutation services, public
 error mapping and any persistent idempotency requirements belong to later milestones.
+
+### Back up, restore, or recover a managed database
+
+Run these commands from the repository root in Windows CMD. With no `--data-root`, the
+maintenance CLI uses `%LOCALAPPDATA%\Portfolio Risk Engine\portfolio.db`. An isolated root must
+be the same absolute local directory used during provisioning or adoption. Maintenance uses
+this explicit target and the managed path, identity, schema and sidecar rules. Browser request
+credentials and `RISKENGINE_DB` do not select a maintenance target.
+
+```cmd
+.venv\Scripts\python.exe -m riskengine.db.maintenance backup
+.venv\Scripts\python.exe -m riskengine.db.maintenance backup --data-root "D:\Sandbox\Portfolio"
+.venv\Scripts\python.exe -m riskengine.db.maintenance verify "D:\Sandbox\Portfolio\backups\BACKUP-NAME.riskbackup"
+```
+
+Backup works while the supported application is running. SQLite's backup API copies a
+consistent committed snapshot, including committed records still in the WAL, while excluding
+uncommitted writes. The snapshot can precede later commits. SQLite backup cancels after
+30 seconds of continuous reported BUSY/LOCKED contention, with no overall wall-clock deadline.
+The source journal mode stays unchanged. The published `.riskbackup` is a single ZIP bundle
+containing a standalone rollback-journal-format `portfolio.db` and a versioned manifest
+with UTC time, schema version, size and SHA-256. The local `backups` directory uses UTC
+names with random suffixes, and publication refuses collisions. Verification checks the
+manifest, digest, exact schema, `integrity_check` and `foreign_key_check` in disposable
+storage. These checks establish compatibility and consistency. Verification and restore
+reject archived WAL-mode images because the bundle must contain a complete database image
+without sidecars. Live WAL-mode
+databases remain supported as backup sources. Verification and restore need temporary disk
+space for a full extracted image, and restore also retains a separate safety backup.
+SHA-256 provides no provenance if someone can rewrite both parts of the bundle. Financial
+records can be structurally valid and still contain bad inputs.
+Use lifecycle adoption for standalone SQLite files.
+
+**Backups and preserved recovery files contain private financial information.** Keep them in
+storage you control. A backup on the same physical disk offers no protection from disk failure
+or device loss. Keep an independent copy accordingly.
+
+For restore or recover, stop `dev.cmd` and wait for backend and frontend shutdown. Stop any
+direct API servers, Streamlit instances, lifecycle inspect or adoption commands, and external
+SQLite tools using the database. FastAPI reserves the canonical `portfolio.db` location for
+managed readers and holds shared ownership on the adjacent `.portfolio-access.lock` before
+starting, even when started from another checkout. Startup fails if ownership cannot be
+established or maintenance is pending. This coordination only affects the ownership file.
+The existing managed write policy separately determines where application or maintenance
+writes are allowed. Online backup also takes shared ownership. Offline maintenance takes
+exclusive ownership with bounded SQLite lock waits. The OS releases ownership
+on process exit. Leave the ownership database in place. Streamlit, lifecycle commands
+and external SQLite tools are outside this protocol. It assumes cooperating application
+processes and a local filesystem with reliable SQLite locking.
+
+```cmd
+.venv\Scripts\python.exe -m riskengine.db.maintenance restore "D:\Sandbox\Portfolio\backups\BACKUP-NAME.riskbackup" --data-root "D:\Sandbox\Portfolio" --confirm
+.venv\Scripts\python.exe -m riskengine.db.maintenance recover --data-root "D:\Sandbox\Portfolio" --confirm
+.venv\Scripts\python.exe -m riskengine.db.maintenance check-active --data-root "D:\Sandbox\Portfolio" --confirm
+set "RISKENGINE_DEMO="
+set "RISKENGINE_DB=D:\Sandbox\Portfolio\portfolio.db"
+dev.cmd
+```
+
+Run only the maintenance command appropriate for the situation.
+
+- **Restore** requires an existing, valid active database without SQLite sidecars. Close every
+  SQLite user and allow SQLite to checkpoint or cleanly close before retrying. Keep any remaining
+  WAL, SHM, or journal with the database and investigate it offline. Restore verifies the selected
+  bundle, retains a verified `pre-restore-*.riskbackup`, prepares the replacement on the same
+  volume, and verifies the active database after replacement. A missing or damaged target is
+  refused so the workflow cannot discard the only recoverable copy.
+- **Recover** supports a single-database hot rollback journal from the supported application.
+  Use it only when the journal belongs to that database and no attached-database transaction was
+  involved. It preserves the original database and journal bytes together under `recovery`,
+  rehearses recovery on a disposable copy with matching basenames, and invokes SQLite's own
+  recovery on the active file only after validating the rehearsal. It checks the result against
+  the rehearsal and retains the original pair. This workflow does not salvage damaged databases,
+  repair foreign-key violations, or recover arbitrary WAL or multi-database transactions.
+- **Check active** acknowledges a pending maintenance outcome only after validating the active
+  database and matching a recorded SHA-256 for a valid state. For recovery, only the verified
+  rehearsal digest is eligible. An interrupted or unverified replacement or recovery
+  leaves a marker that blocks normal startup. Keep the bundle, safety backup, marker, and any
+  recovery files together. If acknowledgement fails, leave the database offline for inspection.
+  Do not retry replacement blindly or remove journals manually.
+
+Temporary files and a pending marker make failure states observable on a cooperating local
+filesystem. They do not provide verified power-loss durability or protection from arbitrary
+same-user file changes. Scheduling, retention, encryption, cloud sync and off-device backup
+management remain outside this CLI.
 
 Run the write-boundary tests with
 `.venv\Scripts\python.exe -m pytest tests\test_application_writes.py -q`.

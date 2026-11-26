@@ -36,6 +36,7 @@ from riskengine.risk.holdings_service import (
 from riskengine.db.application_writes import ApplicationWrites
 from riskengine.db.application_transactions import TransactionExecutor
 from riskengine.db.connection import get_read_only_connection
+from riskengine.db.maintenance_lock import application_database_ownership
 from riskengine.db.portfolios import MissingHistoricalPriceError, get_total_portfolio_equity
 from riskengine.db.transactions import get_net_cash_flows, has_portfolio_currency_conflict
 
@@ -77,22 +78,23 @@ async def lifespan(application: FastAPI):
     previous_transactions = getattr(application.state, "database_transactions", None)
     access = load_local_access()
     selection = select_database()
-    application.state.local_access = access
-    application.state.database = selection
-    writes = ApplicationWrites(
-        selection.path, selection.mode, protected=isinstance(access, LocalAccess),
-        data_root=os.environ.get("RISKENGINE_WRITE_DATA_ROOT"),
-    )
-    application.state.database_transactions = TransactionExecutor(writes)
-    logger.info(
-        "Portfolio API module=%s database=%s mode=%s access=read-only",
-        Path(__file__).resolve(), selection.path, selection.mode,
-    )
-    try:
-        yield
-    finally:
-        application.state.local_access = previous_access
-        application.state.database_transactions = previous_transactions
+    with application_database_ownership(selection.path):
+        application.state.local_access = access
+        application.state.database = selection
+        writes = ApplicationWrites(
+            selection.path, selection.mode, protected=isinstance(access, LocalAccess),
+            data_root=os.environ.get("RISKENGINE_WRITE_DATA_ROOT"),
+        )
+        application.state.database_transactions = TransactionExecutor(writes)
+        logger.info(
+            "Portfolio API module=%s database=%s mode=%s access=read-only",
+            Path(__file__).resolve(), selection.path, selection.mode,
+        )
+        try:
+            yield
+        finally:
+            application.state.local_access = previous_access
+            application.state.database_transactions = previous_transactions
 
 
 class PortfolioAPI(FastAPI):
