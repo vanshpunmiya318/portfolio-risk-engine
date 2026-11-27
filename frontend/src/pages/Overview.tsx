@@ -9,7 +9,7 @@ type SummaryState =
   | { status: 'empty' }
   | { status: 'ready'; data: PortfolioSummary };
 
-export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
+export function Overview({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<SummaryState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -26,7 +26,7 @@ export function Overview({ portfolioId = 1 }: { portfolioId?: number }) {
       });
     });
     return () => controller.abort();
-  }, [portfolioId, attempt]);
+  }, [portfolioId, portfolioRevision, attempt]);
 
   const retry = () => setAttempt((value) => value + 1);
   return <OverviewContent state={state} retry={retry} />;
@@ -56,7 +56,7 @@ export function OverviewContent({ state, retry }: { state: SummaryState; retry: 
         </div>}
         {state.status === 'ready' && <>
           <div className="summary-heading">
-            <div><p className="eyebrow">Historical portfolio</p><h2>{state.data.name}</h2></div>
+            <div><p className="eyebrow">Historical portfolio</p><h2><bdi>{state.data.name}</bdi></h2></div>
             <div className="valuation-date"><span>Historical valuation date</span>
               <time dateTime={state.data.as_of_date}>{formatValuationDate(state.data.as_of_date)}</time>
             </div>

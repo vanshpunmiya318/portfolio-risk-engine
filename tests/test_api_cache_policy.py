@@ -10,7 +10,7 @@ from test_benchmark import golden_spy_db
 from test_golden_portfolio import golden_db
 
 
-def request(app, target, *, bypass_policy=False, raises=None, root_path=""):
+def request(app, target, *, bypass_policy=False, raises=None, root_path="", method="GET"):
     path, _, query = target.partition("?")
     messages = []
 
@@ -22,7 +22,7 @@ def request(app, target, *, bypass_policy=False, raises=None, root_path=""):
 
     async def run():
         scope = {
-            "type": "http", "method": "GET", "path": path, "root_path": root_path,
+            "type": "http", "method": method, "path": path, "root_path": root_path,
             "query_string": query.encode(), "headers": [], "scheme": "http",
             "http_version": "1.1", "server": ("test", 80), "client": ("test", 1),
         }
@@ -46,6 +46,24 @@ def portfolio_db(golden_spy_db, monkeypatch):
     monkeypatch.delenv("RISKENGINE_DEMO", raising=False)
     monkeypatch.setenv("RISKENGINE_DB", connection.execute("PRAGMA database_list").fetchone()[2])
     return connection
+
+
+@pytest.mark.parametrize(("method", "suffix", "status"), [
+    ("GET", "", 200),
+    ("POST", "", 403),
+    ("PATCH", "/1", 403),
+    ("POST", "/mutations", 403),
+    ("GET", "/mutations/" + "a" * 43, 403),
+    ("POST", "/mutations/" + "a" * 43 + "/close", 403),
+])
+def test_legacy_read_only_management_routes(portfolio_db, method, suffix, status):
+    before = portfolio_db.execute("SELECT * FROM portfolios").fetchall()
+    actual, headers, body = request(main.app, "/api/portfolios" + suffix, method=method)
+    assert actual == status
+    assert dict(headers)[b"cache-control"] == b"no-store"
+    if method == "GET" and not suffix:
+        assert b'"management_configured":false' in body
+    assert portfolio_db.execute("SELECT * FROM portfolios").fetchall() == before
 
 
 def assert_no_store(target, expected_status, **kwargs):
@@ -73,6 +91,13 @@ def test_portfolio_json_no_store(portfolio_db, target):
     assert assert_no_store(target, 200)[b"content-type"] == b"application/json"
 
 
+def test_portfolio_directory_no_store(portfolio_db):
+    status, headers, body = request(main.app, "/api/portfolios")
+    assert status == 200
+    assert dict(headers)[b"cache-control"] == b"no-store"
+    assert b'"portfolios":[{"id":1,' in body
+
+
 @pytest.mark.parametrize(("format", "media_type", "extension"), [
     ("json", b"application/json", b"json"),
     ("markdown", b"text/markdown; charset=utf-8", b"md"),
@@ -87,7 +112,7 @@ def test_export_no_store_preserves_download(portfolio_db, format, media_type, ex
 
 @pytest.mark.parametrize(("target", "status"), [
     ("/api/portfolios/999/summary", 404),
-    ("/api/portfolios", 404),
+    ("/api/portfolios/1/no-such-route", 404),
     ("/api/portfolios/0/summary", 422),
     ("/api/portfolios/1/risk?confidence=1", 422),
 ])

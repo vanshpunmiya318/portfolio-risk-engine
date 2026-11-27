@@ -16,7 +16,7 @@ function Metric({ value }: { value: MetricValue }) {
     {value.value === null && <ul className="metric-reasons">{value.unavailable_reasons.map((reason, i) => <li key={i}>{reason.message} <code>{reason.code}</code></li>)}</ul>}</>;
 }
 const date = (value: string | null) => value ? formatValuationDate(value) : 'Unavailable';
-export function RiskAnalytics({ portfolioId = 1 }: { portfolioId?: number }) {
+export function RiskAnalytics({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error'; message: string; details: string[] } | { status: 'ready'; data: RiskResponse }>({ status: 'loading' });
   const [start, setStart] = useState(''); const [end, setEnd] = useState('');
   const [confidence, setConfidence] = useState('.95'); const [validation, setValidation] = useState('');
@@ -28,7 +28,7 @@ export function RiskAnalytics({ portfolioId = 1 }: { portfolioId?: number }) {
     void requests.load(portfolioId, applied, data => setState({ status: 'ready', data }), error => setState({ status: 'error',
       message: error instanceof Error ? error.message : 'Unable to retrieve risk analysis.', details: error instanceof RiskRequestError ? error.details : [] }));
     return () => requests.cancel();
-  }, [portfolioId, applied, attempt]);
+  }, [portfolioId, portfolioRevision, applied, attempt]);
   function apply() {
     const query = { ...(start ? { start_date: start } : {}), ...(end ? { end_date: end } : {}), confidence: Number(confidence) };
     try { riskQuery(query); } catch (error) { setValidation(error instanceof Error ? error.message : 'Invalid selection.'); return; }
@@ -68,7 +68,7 @@ export function RiskContent({ data }: { data: RiskResponse }) {
   };
   const differs = (p.requested_start_date !== null && p.requested_start_date !== p.effective_baseline_date) || (p.requested_end_date !== null && p.requested_end_date !== p.effective_end_date);
   return <>
-    <div className="summary-heading"><div><p className="eyebrow">Historical risk</p><h2>{data.name}</h2></div><div className="valuation-date"><span>Effective reporting period</span><strong>{date(p.effective_baseline_date)} – {date(p.effective_end_date)}</strong></div></div>
+    <div className="summary-heading"><div><p className="eyebrow">Historical risk</p><h2><bdi>{data.name}</bdi></h2></div><div className="valuation-date"><span>Effective reporting period</span><strong>{date(p.effective_baseline_date)} – {date(p.effective_end_date)}</strong></div></div>
     <p className="holdings-date-note">Historical analysis, not live market risk. Applied confidence: {formatWeight(data.confidence)}. Benchmark: {data.benchmark_ticker}.</p>
     <details className="performance-period" open={differs}><summary>Reporting date details{differs ? ' · requested and effective dates differ' : ''}</summary><dl>
       <div><dt>Requested boundaries</dt><dd>{p.requested_start_date ? date(p.requested_start_date) : 'Available history'} – {p.requested_end_date ? date(p.requested_end_date) : 'Available history'}</dd></div>

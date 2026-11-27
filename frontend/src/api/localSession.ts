@@ -1,6 +1,11 @@
 const endpoint = '/api/local-session';
 const authorization = new EventTarget();
+let financialContext: string | null = null;
 let sessionRequests: AbortController | undefined;
+
+export function setFinancialDatabaseContext(context: string | null) {
+  financialContext = context;
+}
 
 export function protectLocalSessionRequests() {
   sessionRequests ??= new AbortController();
@@ -22,7 +27,14 @@ export async function apiFetch(path: string, options: RequestInit = {}) {
   sessionSignal?.throwIfAborted();
   const signal = sessionSignal && options.signal
     ? AbortSignal.any([sessionSignal, options.signal]) : sessionSignal ?? options.signal;
-  const response = await fetch(path, { ...options, signal, credentials: 'same-origin' });
+  const context = (!options.method || options.method === "GET") && /^\/api\/portfolios?\/(?!mutations(?:\/|$))/.test(path) ? financialContext : null;
+  const headers = context ? new Headers(options.headers) : options.headers;
+  if (context && headers instanceof Headers) headers.set('X-RiskEngine-Database-Context', context);
+  const response = await fetch(path, { ...options, headers, signal, credentials: 'same-origin' });
+  if (context && (financialContext !== context || response.headers.get('X-RiskEngine-Context-Changed') === '1')) {
+    if (financialContext === context) invalidateLocalSession();
+    throw new Error('The portfolio database context changed.');
+  }
   if (response.status === 401) invalidateLocalSession();
   else sessionSignal?.throwIfAborted();
   return response;

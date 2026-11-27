@@ -27,7 +27,7 @@ export function TransactionsContent({ data }: { data: TransactionsResponse }) {
     </section>
   </>;
 }
-export function Transactions({ portfolioId = 1 }: { portfolioId?: number }) {
+export function Transactions({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error'; message: string; details: string[] } | { status: 'ready'; data: TransactionsResponse }>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const loader = useRef<ReturnType<typeof createTransactionsLoader> | null>(null);
@@ -36,7 +36,7 @@ export function Transactions({ portfolioId = 1 }: { portfolioId?: number }) {
     const requests = loader.current!; setState({ status: 'loading' });
     void requests.load(portfolioId, data => setState({ status: 'ready', data }), error => setState({ status: 'error', message: error instanceof Error ? error.message : 'Unable to load transactions.', details: error instanceof TransactionsRequestError ? error.details : [] }));
     return () => requests.cancel();
-  }, [portfolioId, attempt]);
+  }, [portfolioId, portfolioRevision, attempt]);
   return <>
     <section className="page-intro"><p className="eyebrow">Portfolio records</p><h1>Transactions</h1><p className="lede">Read-only security trades and external cash flows.</p></section>
     <section aria-label="Transactions history" aria-busy={state.status === 'loading'}>

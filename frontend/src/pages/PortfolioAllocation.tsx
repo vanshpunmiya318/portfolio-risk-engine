@@ -11,7 +11,7 @@ const number = (value: number | null, digits: number) => value === null ? 'Unava
 function Reasons({ title, items }: { title: string; items: AllocationIssue[] }) {
   return items.length ? <section className="allocation-notes"><h3>{title}</h3><ul>{items.map((issue, i) => <li key={i}><strong>{issue.scope}{issue.ticker ? ` · ${issue.ticker}` : ''}: </strong>{issue.message} <code>{issue.code}</code></li>)}</ul></section> : null;
 }
-export function PortfolioAllocation({ portfolioId = 1 }: { portfolioId?: number }) {
+export function PortfolioAllocation({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error'; message: string; details: string[] } | { status: 'ready'; data: AllocationResponse }>({ status: 'loading' });
   const [draft, setDraft] = useState(''); const [validation, setValidation] = useState('');
   const [applied, setApplied] = useState<{ day?: string }>({}); const [attempt, setAttempt] = useState(0);
@@ -21,7 +21,7 @@ export function PortfolioAllocation({ portfolioId = 1 }: { portfolioId?: number 
     const requests = loader.current!; setState({ status: 'loading' });
     void requests.load(portfolioId, applied.day, data => setState({ status: 'ready', data }), error => setState({ status: 'error', message: error instanceof Error ? error.message : 'Unable to load allocation.', details: error instanceof AllocationRequestError ? error.details : [] }));
     return () => requests.cancel();
-  }, [portfolioId, applied, attempt]);
+  }, [portfolioId, portfolioRevision, applied, attempt]);
   function apply() {
     const day = draft || undefined;
     try { allocationQuery(day); } catch (error) { setValidation(error instanceof Error ? error.message : 'Invalid date.'); return; }
@@ -53,7 +53,7 @@ export function AllocationContent({ data }: { data: AllocationResponse }) {
     ['Largest-position weight', formatWeight(table.currentValid ? c.concentration.largest_position_weight : null), 'Share of invested holdings, excluding cash'],
   ];
   return <>
-    <div className="summary-heading"><div><p className="eyebrow">Historical allocation</p><h2>{data.name}</h2></div><div className="valuation-date"><span>Effective valuation date</span><strong>{date(data.effective_valuation_date)}</strong></div></div>
+    <div className="summary-heading"><div><p className="eyebrow">Historical allocation</p><h2><bdi>{data.name}</bdi></h2></div><div className="valuation-date"><span>Effective valuation date</span><strong>{date(data.effective_valuation_date)}</strong></div></div>
     <p className="holdings-date-note">Requested date: {data.requested_valuation_date ? date(data.requested_valuation_date) : 'Latest available'}. Effective cutoff: {date(data.effective_valuation_date)}. Historical records, not live market prices. All amounts in {data.currency}.</p>
     {!c.valuation_complete && <div className="quality-banner" role="status"><strong>Incomplete current valuation</strong><p>Aggregate weights, concentration and comparisons are unavailable. Known individual values may still be displayed; missing values are never zero.</p></div>}
     <dl className="summary-metrics allocation-metrics">{metrics.map(([title, value, note]) => <div className="summary-metric" key={title}><dt>{title}</dt><dd>{value}</dd><dd className="metric-note">{note}</dd></div>)}</dl>

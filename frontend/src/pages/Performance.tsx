@@ -23,7 +23,7 @@ function Metric({ metric, difference = false }: { metric: MetricValue; differenc
     {metric.unavailable_reasons.map((reason, index) => <li key={index}>{reason.message} <code>{reason.code}</code></li>)}
   </ul>}</>;
 }
-export function Performance({ portfolioId = 1 }: { portfolioId?: number }) {
+export function Performance({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
@@ -40,7 +40,7 @@ export function Performance({ portfolioId = 1 }: { portfolioId?: number }) {
       details: error instanceof PerformanceRequestError ? error.details : [],
     }));
     return () => requests.cancel();
-  }, [portfolioId, applied, attempt]);
+  }, [portfolioId, portfolioRevision, applied, attempt]);
   const retry = () => setAttempt(value => value + 1);
   function apply() {
     const query = { ...(start ? { start_date: start } : {}), ...(end ? { end_date: end } : {}) };
@@ -96,7 +96,7 @@ export function PerformanceContent({ data }: { data: PerformanceResponse }) {
   const changed = (p.requested_start_date !== null && p.requested_start_date !== p.effective_baseline_date) ||
     (p.requested_end_date !== null && p.requested_end_date !== p.effective_end_date);
   return <>
-    <div className="summary-heading"><div><p className="eyebrow">Historical analysis</p><h2>{data.name}</h2></div>
+    <div className="summary-heading"><div><p className="eyebrow">Historical analysis</p><h2><bdi>{data.name}</bdi></h2></div>
       <div className="valuation-date"><span>Effective reporting period</span><strong>{dateLabel(p.effective_baseline_date)} – {dateLabel(p.effective_end_date)}</strong></div></div>
     <p className="holdings-date-note">Historical results, not today’s live performance. Benchmark: {data.benchmark_ticker}.</p>
     <details className="performance-period" open={changed}><summary>Reporting date details{changed ? ' · requested and effective dates differ' : ''}</summary>

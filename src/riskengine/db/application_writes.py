@@ -126,41 +126,48 @@ class ApplicationWrites:
         except DatabaseLifecycleError as error:
             raise ApplicationWriteError("incompatible_schema") from error
 
-    @contextmanager
-    def connect(self) -> Iterator[sqlite3.Connection]:
+    def probe(self, expected_identity: tuple[int, int] | None = None) -> tuple[Path, tuple[int, int]]:
+        """Check write prerequisites without opening a writable SQLite connection."""
         path = self.managed
         if self.denial_reason or path is None:
             raise ApplicationWriteError(self.denial_reason or "ineligible_target")
         if self.selected != path:
             raise ApplicationWriteError("ineligible_target")
+        try:
+            identity = self._identity(path)
+            if expected_identity is not None and identity != expected_identity:
+                raise ApplicationWriteError("file_identity")
+            # Windows Path equality folds case, including on case-sensitive directories.
+            if str(self.selected) != str(path) and self._identity(self.selected) != identity:
+                raise ApplicationWriteError("file_identity")
+            try:
+                with _closing(sqlite3.connect(
+                    path.as_uri() + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS, **_TRANSACTION_OPTIONS,
+                )) as probe:
+                    if self._identity(path) != identity:
+                        raise ApplicationWriteError("file_identity")
+                    self._validate(probe)
+            except sqlite3.Error as error:
+                if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_READONLY_ROLLBACK:
+                    raise ApplicationWriteError("recovery_required") from error
+                raise
+            # Test OS permission without changing bytes or opening SQLite in write mode.
+            with path.open("r+b"):
+                pass
+            if self._identity(path) != identity:
+                raise ApplicationWriteError("file_identity")
+        except (sqlite3.Error, OSError) as error:
+            raise ApplicationWriteError("connection_failure") from error
+        return path, identity
+
+    @contextmanager
+    def connect(self, *, expected_identity: tuple[int, int] | None = None) -> Iterator[sqlite3.Connection]:
+        path, identity = self.probe(expected_identity)
         connection = None
         try:
             try:
-                identity = self._identity(path)
-                # Windows Path equality folds case, including on directories
-                # configured for case-sensitive lookup.
-                if str(self.selected) != str(path) and self._identity(self.selected) != identity:
-                    raise ApplicationWriteError("file_identity")
-                uri = path.as_uri()
-                try:
-                    with _closing(sqlite3.connect(
-                        uri + "?mode=ro", uri=True, timeout=BUSY_TIMEOUT_SECONDS, **_TRANSACTION_OPTIONS,
-                    )) as probe:
-                        if self._identity(path) != identity:
-                            raise ApplicationWriteError("file_identity")
-                        self._validate(probe)
-                except sqlite3.Error as error:
-                    if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_READONLY_ROLLBACK:
-                        raise ApplicationWriteError("recovery_required") from error
-                    raise
-                # SQLite can fall back to a read-only handle for OS permission
-                # failures. Check write-open permission without changing bytes.
-                with path.open("r+b"):
-                    pass
-                if self._identity(path) != identity:
-                    raise ApplicationWriteError("file_identity")
                 connection = sqlite3.connect(
-                    uri + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT_SECONDS, **_TRANSACTION_OPTIONS,
+                    path.as_uri() + "?mode=rw", uri=True, timeout=BUSY_TIMEOUT_SECONDS, **_TRANSACTION_OPTIONS,
                 )
                 if self._identity(path) != identity:
                     raise ApplicationWriteError("file_identity")

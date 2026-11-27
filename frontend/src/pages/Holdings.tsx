@@ -10,7 +10,7 @@ type State = { status: 'loading' } | { status: 'error'; message: string } | { st
 const gainClass = (value: number | null) => value === null || value === 0 ? undefined : value < 0 ? 'value-negative' : 'value-positive';
 const priceLabels = { current: 'Exact-date price', carried_forward: 'Earlier price', stale: 'Stale · excluded', missing: 'Missing price', invalid: 'Invalid · excluded' };
 
-export function Holdings({ portfolioId = 1 }: { portfolioId?: number }) {
+export function Holdings({ portfolioId = 1, portfolioRevision }: { portfolioId?: number; portfolioRevision?: string }) {
   const [state, setState] = useState<State>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
@@ -23,7 +23,7 @@ export function Holdings({ portfolioId = 1 }: { portfolioId?: number }) {
         ? error.message : 'Unable to retrieve holdings. Check the API connection and try again.' });
     });
     return () => controller.abort();
-  }, [portfolioId, attempt]);
+  }, [portfolioId, portfolioRevision, attempt]);
   const retry = () => setAttempt((value) => value + 1);
 
   return <>
@@ -48,7 +48,7 @@ export function HoldingsContent({ data, retry }: { data: HoldingsResponse; retry
     { label: 'Open holdings', value: String(data.totals.holding_count), note: `${data.totals.valued_holding_count} with usable valuations` },
   ];
   return <>
-    <div className="summary-heading"><div><p className="eyebrow">Historical positions</p><h2>{data.name}</h2></div>
+    <div className="summary-heading"><div><p className="eyebrow">Historical positions</p><h2><bdi>{data.name}</bdi></h2></div>
       <div className="valuation-date"><span>Historical valuation cutoff</span>{date
         ? <time dateTime={date}>{formatValuationDate(date)}</time> : <strong>No valuation date available</strong>}</div></div>
     <p className="holdings-date-note">These are historical records, not today’s live market values. Price dates are listed for each holding.

@@ -169,7 +169,16 @@ class TransactionExecutor:
     def __init__(self, writes: ApplicationWrites):
         self._writes = writes
 
-    def run(self, operation: Callable[[Transaction], Result]) -> Result:
+    @property
+    def writes_configured(self) -> bool:
+        """Report configured eligibility. Every mutation still checks the database."""
+        return self._writes.managed is not None and self._writes.denial_reason is None
+
+    def probe(self, identity: tuple[int, int]) -> None:
+        self._writes.probe(identity)
+
+    def run(self, operation: Callable[[Transaction], Result], *,
+            expected_identity: tuple[int, int] | None = None) -> Result:
         if _active.get():
             raise TransactionError("nested_execution", "operation", "not_started")
         if inspect.iscoroutinefunction(operation) or inspect.isasyncgenfunction(operation):
@@ -179,7 +188,9 @@ class TransactionExecutor:
         acquired = False
         try:
             try:
-                with self._writes.connect() as connection:
+                grant = (self._writes.connect() if expected_identity is None
+                         else self._writes.connect(expected_identity=expected_identity))
+                with grant as connection:
                     acquired = True
                     try:
                         result = _run(connection, operation)

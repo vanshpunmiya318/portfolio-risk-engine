@@ -1,5 +1,8 @@
 
+import hashlib
+import hmac
 import logging
+import secrets
 import os
 import sqlite3
 from contextlib import asynccontextmanager, closing
@@ -8,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, HTTPException, Request, Path as ApiPath, Query
+from fastapi import FastAPI, Header, HTTPException, Request, Path as ApiPath, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from starlette.datastructures import MutableHeaders
@@ -28,13 +31,19 @@ from riskengine.risk.performance_service import (
     get_risk_response, validate_risk_request,
 )
 from riskengine.api.holdings_models import HoldingsResponse
+from riskengine.api.portfolio_management import (
+    BASE_CURRENCIES, MAX_CLIENT_ID, CreatePortfolio, Portfolio, PortfolioList, PreparePortfolio,
+    RenamePortfolio, UnsupportedPortfolio,
+    create_portfolio, mutation_http_error, rename_portfolio, validate_currency, validate_name,
+)
+from riskengine.api.mutation_tickets import Command, MutationTickets, TicketResult
 from riskengine.api.local_access import LocalAccess, SESSION_PATH, deny, load_local_access
 from riskengine.risk.holdings_service import (
     get_holdings_summary, PortfolioNotFound, HoldingsInputError, HoldingsDataConflict,
 )
 
-from riskengine.db.application_writes import ApplicationWrites
-from riskengine.db.application_transactions import TransactionExecutor
+from riskengine.db.application_writes import ApplicationWriteError, ApplicationWrites
+from riskengine.db.application_transactions import TransactionError, TransactionExecutor
 from riskengine.db.connection import get_read_only_connection
 from riskengine.db.maintenance_lock import application_database_ownership
 from riskengine.db.portfolios import MissingHistoricalPriceError, get_total_portfolio_equity
@@ -86,6 +95,9 @@ async def lifespan(application: FastAPI):
             data_root=os.environ.get("RISKENGINE_WRITE_DATA_ROOT"),
         )
         application.state.database_transactions = TransactionExecutor(writes)
+        application.state.mutation_tickets = MutationTickets()
+        application.state.database_context_key = secrets.token_bytes(32)
+        application.state.database_generation = access.generation if access else secrets.token_urlsafe(16)
         logger.info(
             "Portfolio API module=%s database=%s mode=%s access=read-only",
             Path(__file__).resolve(), selection.path, selection.mode,
@@ -95,6 +107,15 @@ async def lifespan(application: FastAPI):
         finally:
             application.state.local_access = previous_access
             application.state.database_transactions = previous_transactions
+
+
+def database_context(state) -> tuple[str, tuple[int, int]]:
+    info = state.database.path.stat()
+    if not info.st_ino:
+        raise OSError("Database file identity is unavailable.")
+    identity = (info.st_dev, info.st_ino)
+    context = hmac.new(state.database_context_key, repr(identity).encode(), hashlib.sha256).hexdigest()
+    return context, identity
 
 
 class PortfolioAPI(FastAPI):
@@ -120,6 +141,18 @@ class PortfolioAPI(FastAPI):
         elif scope["method"] not in {"GET", "HEAD"}:
             await deny(403, "Legacy API mode is read-only.")(scope, receive, send)
             return
+        expected_context = Request(scope).headers.get("x-riskengine-database-context")
+        verify_context = bool(expected_context and path.startswith(("/api/portfolio/", "/api/portfolios/")))
+        if verify_context:
+            try:
+                valid_context = database_context(self.state)[0] == expected_context
+            except OSError:
+                valid_context = False
+            if not valid_context:
+                response = deny(409, "The portfolio database context changed. Reload the workspace.")
+                response.headers["X-RiskEngine-Context-Changed"] = "1"
+                await response(scope, receive, send)
+                return
         cache_prefixes = ("/api/",) if access is not False else ("/api/portfolio/", "/api/portfolios/")
         if path != SESSION_PATH and not (path + "/").startswith(cache_prefixes):
             await super().__call__(scope, receive, send)
@@ -127,9 +160,23 @@ class PortfolioAPI(FastAPI):
 
         # Wrap the ASGI send outside FastAPI's error middleware so generated 500s are covered.
         successful = False
+        replaced_response = False
 
         async def send_no_store(message: Message) -> None:
-            nonlocal successful
+            nonlocal successful, replaced_response
+            if replaced_response:
+                return
+            if verify_context and message["type"] == "http.response.start":
+                try:
+                    valid_context = database_context(self.state)[0] == expected_context
+                except OSError:
+                    valid_context = False
+                if not valid_context:
+                    replaced_response = True
+                    response = deny(409, "The portfolio database context changed. Reload the workspace.")
+                    response.headers["X-RiskEngine-Context-Changed"] = "1"
+                    await response(scope, receive, send)
+                    return
             if message["type"] == "http.response.start":
                 MutableHeaders(scope=message)["Cache-Control"] = "no-store"
                 successful = message["status"] == 200
@@ -151,6 +198,149 @@ app = PortfolioAPI(
 def local_session(request: Request):
     access = getattr(request.app.state, "local_access", False)
     return {"generation": access.generation if access else "legacy-read-only"}
+
+
+@app.get("/api/portfolios", response_model=PortfolioList)
+def list_portfolios(request: Request):
+    state = request.app.state
+    try:
+        context, identity = database_context(state)
+        with closing(get_connection(state.database.path, read_only=True)) as connection:
+            rows = connection.execute("SELECT id, name, currency FROM portfolios ORDER BY id").fetchall()
+        executor = state.database_transactions
+        availability = "unavailable"
+        if executor.writes_configured:
+            try:
+                executor.probe(identity)
+                availability = "available"
+            except ApplicationWriteError as error:
+                availability = "unknown" if error.reason == "connection_failure" else "unavailable"
+            except (OSError, sqlite3.Error):
+                availability = "unknown"
+        if database_context(state) != (context, identity):
+            raise OSError("Database changed while reading.")
+    except (OSError, sqlite3.Error) as error:
+        raise HTTPException(503, "The portfolio directory is unavailable. Refresh to try again.") from error
+
+    supported, unsupported = [], []
+    for identity, name, currency in rows:
+        if 0 < identity <= MAX_CLIENT_ID:
+            supported.append(Portfolio(id=identity, name=name, currency=currency))
+        else:
+            unsupported.append(UnsupportedPortfolio(
+                id=str(identity), reason="nonpositive" if identity <= 0 else "outside_client_range",
+            ))
+    return PortfolioList(
+        portfolios=supported, unsupported=unsupported, context=context,
+        generation=state.database_generation, management_configured=executor.writes_configured,
+        write_availability=availability, supported_currencies=list(BASE_CURRENCIES),
+    )
+
+
+def ticket_session(request: Request) -> tuple[str, str]:
+    access = request.app.state.local_access
+    if not access or not access.session:
+        raise HTTPException(403, "A protected local session is required.")
+    return access.generation, hashlib.sha256(access.session.encode()).hexdigest()
+
+
+def command_for(target: int | None, name: str, currency: str | None) -> Command:
+    if (target is None) != (currency is not None):
+        raise HTTPException(422, "Creation requires a base currency. Renaming accepts only a name.")
+    return target, validate_name(name), validate_currency(currency) if currency is not None else None
+
+
+@app.post("/api/portfolios/mutations", response_model=TicketResult, status_code=201)
+def prepare_portfolio_mutation(request: Request, payload: PreparePortfolio):
+    state = request.app.state
+    session = ticket_session(request)
+    if not state.database_transactions.writes_configured:
+        raise HTTPException(403, "Portfolio changes require a writable managed database.")
+    try:
+        context, identity = database_context(state)
+    except OSError as error:
+        raise HTTPException(503, "The managed portfolio database is unavailable.") from error
+    if payload.context != context:
+        raise HTTPException(409, "The portfolio database context changed. Refresh portfolios.")
+    command = command_for(payload.target, payload.name, payload.currency)
+    return state.mutation_tickets.prepare((*session, identity), command)
+
+
+@app.get("/api/portfolios/mutations/{ticket}", response_model=TicketResult)
+def portfolio_mutation_status(request: Request, ticket: Annotated[str, ApiPath(pattern=r"^[A-Za-z0-9_-]{43}$")]):
+    return request.app.state.mutation_tickets.inspect(ticket, ticket_session(request))[0]
+
+
+@app.post("/api/portfolios/mutations/{ticket}/close", response_model=TicketResult)
+def close_portfolio_mutation(request: Request, ticket: Annotated[str, ApiPath(pattern=r"^[A-Za-z0-9_-]{43}$")]):
+    return request.app.state.mutation_tickets.inspect(ticket, ticket_session(request), close=True)[0]
+
+
+def execute_portfolio_mutation(request: Request, ticket: str | None, command: Command) -> TicketResult:
+    session = ticket_session(request)
+    state = request.app.state
+    if not state.database_transactions.writes_configured:
+        raise HTTPException(403, "Portfolio changes require a writable managed database.")
+    if not ticket or len(ticket) != 43:
+        raise HTTPException(422, "A prepared portfolio mutation ticket is required.")
+    try:
+        _, identity = database_context(state)
+    except OSError as error:
+        raise HTTPException(503, "The managed portfolio database is unavailable.") from error
+
+    registry = state.mutation_tickets
+    result, claimed = registry.inspect(ticket, session, command=command, identity=identity)
+    if not claimed:
+        return result
+
+    target, name, currency = command
+
+    portfolio = None
+
+    def operation(transaction):
+        nonlocal portfolio
+        row = (create_portfolio(transaction, name, currency) if currency is not None
+               else rename_portfolio(transaction, target, name))
+        portfolio = Portfolio(id=row[0], name=row[1], currency=row[2])
+        return row
+
+    result = TicketResult(ticket=ticket, outcome="unknown")
+    try:
+        state.database_transactions.run(operation, expected_identity=identity)
+        result = TicketResult(ticket=ticket, outcome="committed", portfolio=portfolio)
+    except TransactionError as error:
+        failure = mutation_http_error(error)
+        detail = failure.detail
+        if error.outcome == "committed" and portfolio is not None:
+            result = TicketResult(ticket=ticket, outcome="committed", portfolio=portfolio)
+        else:
+            result = TicketResult(ticket=ticket, outcome="unknown" if error.outcome == "committed" else error.outcome,
+                                  reason=detail if isinstance(detail, str) else detail["message"],
+                                  http_status=failure.status_code)
+    finally:
+        registry.finish(result)
+    return result
+
+
+@app.post("/api/portfolios", response_model=TicketResult, status_code=201)
+def add_managed_portfolio(request: Request, payload: CreatePortfolio, response: Response,
+                          x_riskengine_ticket: Annotated[str | None, Header()] = None):
+    result = execute_portfolio_mutation(request, x_riskengine_ticket, command_for(None, payload.name, payload.currency))
+    response.status_code = result.http_status or (201 if result.outcome == "committed" else 200)
+    return result
+
+
+@app.patch("/api/portfolios/{portfolio_id}", response_model=TicketResult)
+def rename_managed_portfolio(
+    request: Request,
+    portfolio_id: Annotated[int, ApiPath(gt=0, le=MAX_CLIENT_ID)],
+    payload: RenamePortfolio,
+    response: Response,
+    x_riskengine_ticket: Annotated[str | None, Header()] = None,
+):
+    result = execute_portfolio_mutation(request, x_riskengine_ticket, command_for(portfolio_id, payload.name, None))
+    response.status_code = result.http_status or 200
+    return result
 
 
 @app.get("/api/portfolios/{portfolio_id}/report", response_model=ReportResponse)

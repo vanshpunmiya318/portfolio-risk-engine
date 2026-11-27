@@ -7,19 +7,26 @@ import { RiskAnalytics } from './pages/RiskAnalytics';
 import { PortfolioAllocation } from './pages/PortfolioAllocation';
 import { Transactions } from './pages/Transactions';
 import { Reports } from './pages/Reports';
+import { PortfolioProvider, usePortfolios } from './PortfolioProvider';
+import { PortfolioControls } from './PortfolioControls';
 
 const pages = [
-  { path: '/overview', title: 'Overview' },
-  { path: '/holdings', title: 'Holdings' },
-  { path: '/transactions', title: 'Transactions' },
-  { path: '/performance', title: 'Performance' },
-  { path: '/risk-analytics', title: 'Risk Analytics' },
-  { path: '/portfolio-allocation', title: 'Portfolio Allocation' },
-  { path: '/reports', title: 'Reports' },
+  { path: '/overview', title: 'Overview', Page: Overview },
+  { path: '/holdings', title: 'Holdings', Page: Holdings },
+  { path: '/transactions', title: 'Transactions', Page: Transactions },
+  { path: '/performance', title: 'Performance', Page: Performance },
+  { path: '/risk-analytics', title: 'Risk Analytics', Page: RiskAnalytics },
+  { path: '/portfolio-allocation', title: 'Portfolio Allocation', Page: PortfolioAllocation },
+  { path: '/reports', title: 'Reports', Page: Reports },
 ];
 
 export function App() {
+  return <PortfolioProvider configured={import.meta.env.VITE_PORTFOLIO_ID}><Workspace /></PortfolioProvider>;
+}
+
+function Workspace() {
   const location = useLocation();
+  const { active, directory, loading, error } = usePortfolios();
   const title = pages.find((page) => page.path === location.pathname)?.title ?? 'Page not found';
   return (
     <div className="app-shell">
@@ -48,15 +55,21 @@ export function App() {
           <ThemeToggle />
         </header>
         <main id="main-content" tabIndex={-1}>
+          <PortfolioControls />
           <Routes>
             <Route path="/" element={<Navigate to="/overview" replace />} />
-            <Route path="/overview" element={<Overview portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/holdings" element={<Holdings portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/performance" element={<Performance portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/risk-analytics" element={<RiskAnalytics portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/portfolio-allocation" element={<PortfolioAllocation portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/reports" element={<Reports portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
-            <Route path="/transactions" element={<Transactions portfolioId={Number(import.meta.env.VITE_PORTFOLIO_ID ?? '1')} />} />
+            {pages.map(({ path, title: pageTitle, Page }) => <Route key={path} path={path} element={active
+              ? <div hidden={!!error}>
+                  <Page key={JSON.stringify([directory?.context, active.id])} portfolioId={active.id}
+                    portfolioRevision={active.name} directoryTrusted={!error && !loading} />
+                </div>
+              : <section className="page-intro"><h1>{pageTitle}</h1>
+                  {directory && <p>{directory.portfolios.length ? 'Select a portfolio to continue.'
+                    : directory.write_availability === 'available' ? 'Create a portfolio to open this page.'
+                    : 'This database contains no portfolios. Creation is unavailable in read-only mode.'}</p>}
+                  {!directory && !loading && <p>Refresh the portfolio list to continue.</p>}
+                </section>
+            } />)}
             <Route path="*" element={<section className="page-intro"><h1>Page not found</h1>
               <NavLink className="text-link" to="/overview">Return to overview →</NavLink></section>} />
           </Routes>

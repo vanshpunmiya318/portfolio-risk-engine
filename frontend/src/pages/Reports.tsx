@@ -1,5 +1,5 @@
 import { TableScroll } from '../components/TableScroll';
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { onSessionLost } from '../api/localSession';
 import type { ReactNode } from 'react';
 import { createMarkdownLoader, createReportLoader, draftQuery, hasDraftChanges, initialReportDraft, ReportRequestError } from '../api/reports';
@@ -105,7 +105,7 @@ export function ReportContent({ data }: { data: ReportResponse }) {
     ? 'No invested holdings. Zero invested value is distinct from unavailable allocation or concentration.'
     : 'No holdings rows supplied for this incomplete valuation; see availability notes.';
   return <div className="report-content">
-    <div className="summary-heading"><div><p className="eyebrow">Validated report</p><h2>{data.name}</h2></div><div className="valuation-date"><span>Exact valuation cutoff</span><strong>{date(data.endpoint.valuation_date)}</strong></div></div>
+    <div className="summary-heading"><div><p className="eyebrow">Validated report</p><h2><bdi>{data.name}</bdi></h2></div><div className="valuation-date"><span>Exact valuation cutoff</span><strong>{date(data.endpoint.valuation_date)}</strong></div></div>
     <p className="holdings-date-note">Historical stored records, not live market prices. Currency: {data.currency}. Applied benchmark: {data.performance.benchmark_ticker}. Confidence: {formatWeight(data.risk.confidence)}.</p>
     {data.status !== 'ok' && <div className="quality-banner" role="status"><strong>{data.status === 'partial' ? 'Partial report' : 'Financial results unavailable'}</strong><p>Available sections remain visible. Unavailable values are not zero. Validated reports can still be downloaded.</p></div>}
     <nav className="report-section-nav" aria-label="Report sections">{[
@@ -187,9 +187,11 @@ export function ReportContent({ data }: { data: ReportResponse }) {
   </div>;
 }
 
-type State = { status: 'loading' } | { status: 'error'; message: string; details: string[] } | { status: 'ready'; artifact: ReportArtifact };
+type State = { status: 'loading' } | { status: 'error'; message: string; details: string[] } | { status: 'ready'; revision?: string; artifact: ReportArtifact };
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Unable to retrieve report.';
-export function Reports({ portfolioId = 1 }: { portfolioId?: number }) {
+export function Reports({ portfolioId = 1, portfolioRevision, directoryTrusted = true }: {
+  portfolioId?: number; portfolioRevision?: string; directoryTrusted?: boolean;
+}) {
   const [draft, setDraft] = useState({ ...initialReportDraft });
   const [applied, setApplied] = useState<ReportQuery>(() => draftQuery(initialReportDraft));
   const [state, setState] = useState<State>({ status: 'loading' });
@@ -198,16 +200,17 @@ export function Reports({ portfolioId = 1 }: { portfolioId?: number }) {
   const [jsonError, setJsonError] = useState('');
   const loaders = useRef<{ preview: ReturnType<typeof createReportLoader>; markdown: ReturnType<typeof createMarkdownLoader> } | null>(null);
   if (!loaders.current) loaders.current = { preview: createReportLoader(), markdown: createMarkdownLoader() };
-  const artifact = state.status === 'ready' && state.artifact.id === portfolioId && JSON.stringify(state.artifact.query) === JSON.stringify(applied) ? state.artifact : null;
+  const artifact = directoryTrusted && state.status === 'ready' && state.revision === portfolioRevision && state.artifact.id === portfolioId && JSON.stringify(state.artifact.query) === JSON.stringify(applied) ? state.artifact : null;
   const activeArtifact = useRef<ReportArtifact | null>(null); activeArtifact.current = artifact;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const requests = loaders.current!;
     setState({ status: 'loading' }); setMarkdown({ status: 'idle' }); setJsonError('');
-    void requests.preview.load({ id: portfolioId, query: applied }, result => setState({ status: 'ready', artifact: result }), error => setState({ status: 'error', message: errorMessage(error), details: error instanceof ReportRequestError ? error.details : [] }));
+    if (!directoryTrusted) return;
+    void requests.preview.load({ id: portfolioId, query: applied }, result => setState({ status: 'ready', revision: portfolioRevision, artifact: result }), error => setState({ status: 'error', message: errorMessage(error), details: error instanceof ReportRequestError ? error.details : [] }));
     const cancel = () => { requests.preview.cancel(); requests.markdown.cancel(); };
     const unsubscribe = onSessionLost(() => { activeArtifact.current = null; cancel(); });
-    return () => { unsubscribe(); cancel(); };
-  }, [portfolioId, applied, attempt]);
+    return () => { activeArtifact.current = null; unsubscribe(); cancel(); };
+  }, [portfolioId, portfolioRevision, directoryTrusted, applied, attempt]);
   function invalidate() { loaders.current!.preview.cancel(); loaders.current!.markdown.cancel(); activeArtifact.current = null; setState({ status: 'loading' }); setMarkdown({ status: 'idle' }); setJsonError(''); }
   function apply() {
     try { const query = draftQuery(draft); setValidation(''); invalidate(); setApplied(query); }

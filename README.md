@@ -121,7 +121,7 @@ does not include a usable database. To use an existing database elsewhere, set `
 be provisioned. Use `set "RISKENGINE_DEMO="` in CMD to clear demo mode.
 
 ```cmd
-rem Optional: select a portfolio ID that exists in the chosen database (default: 1)
+rem Optional: select a portfolio ID that exists in the chosen database on launch
 set "VITE_PORTFOLIO_ID=1"
 dev.cmd
 ```
@@ -133,8 +133,8 @@ The displayed URL contains no launch code.
 While FastAPI is running, http://127.0.0.1:8000/health checks process liveness and
 http://127.0.0.1:8000/ready checks database access and required schema. If startup reports a database
 problem, check which file the environment selects and whether it exists, is readable, and has the
-application schema. If a page reports a missing portfolio after startup, check that
-`VITE_PORTFOLIO_ID` exists in the selected database. An empty database can pass readiness.
+application schema. An invalid configured portfolio is explained in the browser, where you can choose another one.
+An empty database can pass readiness.
 Type `stop` then Enter (or press Ctrl+C), wait for shutdown, and run `dev.cmd` again after changing settings.
 See the [frontend README](frontend/README.md) for the seven routes and port overrides.
 
@@ -164,9 +164,9 @@ Refresh if a new launcher tab already established a session. Otherwise restart `
 
 All financial API routes, including report exports, require a valid session and use `no-store`.
 `/health` and `/ready` remain session-independent under the local Host and Origin rules.
-Interactive API docs and OpenAPI are hidden in protected mode. A future unsafe API request
+Interactive API docs and OpenAPI are hidden in protected mode. An unsafe API request
 must use the exact browser Origin, a valid session, and the non-simple `X-RiskEngine-Request`
-header. There are no financial write endpoints.
+header. Portfolio creation and renaming are the supported browser changes.
 
 Protected startup fails if its launcher configuration is unavailable. An explicit
 `RISKENGINE_API_MODE=legacy-read-only` is available for isolated developer read-contract testing.
@@ -241,8 +241,7 @@ dev.cmd
 For an isolated managed directory created with `--data-root`, set
 `RISKENGINE_WRITE_DATA_ROOT` to that same absolute local directory and
 `RISKENGINE_DB` to its `portfolio.db`. Clear the write opt-in with
-`set "RISKENGINE_WRITE_DATA_ROOT="`. These are developer settings. There are currently no
-financial editing endpoints.
+`set "RISKENGINE_WRITE_DATA_ROOT="`. These are developer settings. The browser supports creating portfolios and renaming them.
 
 Demo selection still takes precedence, followed by the explicit database override and the
 historical default. Writable access requires protected mode and a match between the effective
@@ -277,9 +276,42 @@ Keep both files together and use the controlled offline recovery workflow below.
 does not recover journals automatically. A non-hot rollback journal and ordinary WAL sidecars
 can remain usable.
 
+### Manage local portfolios
+
+The portfolio selector is shared across the seven pages. A valid explicit
+`VITE_PORTFOLIO_ID` takes precedence at launch. If the configured ID is invalid, choose
+manually. Without an explicit value, the app chooses ID 1 when available, then a sole
+supported portfolio. With several other choices, select one to open the financial pages.
+Selection stays in memory for the current database context. A portfolio switch resets
+page controls. Renaming preserves the applied analysis and its draft controls.
+
+An empty writable managed database shows the first-portfolio form. Create a portfolio in
+USD or EUR, then use **Manage portfolios** to rename it. Names permit 1 to 80 normalized
+characters, collapse whitespace, and are compared without case. International names may
+use join controls. Unsafe formatting and invisible-only names are rejected. Existing
+names and currencies, including legacy currencies, are preserved. Unsupported legacy IDs
+are shown as exact diagnostics while supported IDs remain selectable. Read-only databases
+can be viewed and switched. The directory reports an advisory write availability check.
+The server still authorizes and validates the database for every write.
+
+If a change loses its acknowledgement, choose **Check change status**. A directory refresh
+can show the current data while the earlier change is still running. If execution has not
+claimed the prepared ticket, **Close if unstarted** can permanently close it. A running
+ticket remains blocked. If a result is no longer available after expiry, session loss or
+restart, inspect the directory and explicitly acknowledge that the change may have saved
+before submitting a new change. The browser never retries a write automatically.
+
+A ticket admits at most one transaction executor entry within the issuing backend
+generation. The backend retains running entries and keeps terminal outcomes for a
+limited time. The tab stores an opaque pending marker before dispatch so a reload in that
+tab can check the outcome. Clearing storage or closing the tab can lose the marker.
+Other tabs can issue independent operations. A backend restart fences old tickets and can
+lose the evidence needed to resolve a previous operation. The protocol has no durable
+exactly-once guarantee and uses the existing managed database schema.
+
 ### Execute an application transaction
 
-Future FastAPI mutation services use `app.state.database_transactions.run(operation)` after
+FastAPI mutation services use `app.state.database_transactions.run(operation)` after
 request authorization. The protected local API verifies the request and session. The managed
 database capability verifies the startup-selected target. The executor then acquires a fresh
 connection and begins `BEGIN IMMEDIATE` before invoking the synchronous operation. Put
@@ -298,18 +330,18 @@ same execution context fail immediately. Keep callbacks short and synchronous on
 thread, with no spawned transaction workers or external side effects.
 
 SQLite's write reservation serializes writers for the same database across connections and
-processes. There is no application lock or automatic retry. The executor commits only after
+processes. The executor uses SQLite's lock and performs no automatic retry. It commits only after
 successful callback execution and result validation. It attempts rollback on failure and
 always attempts connection cleanup. `TransactionError` reports a reason, phase and outcome.
 `not_started` and `rolled_back` describe confirmed outcomes. `unknown` covers failures
 where the transaction state does not establish what persisted. A cleanup failure after a
-successful commit reports `committed`. Treat both `unknown` and `committed` as requiring
-reconciliation before any retry. Preserve the primary error and log secondary failures
-internally. Public error mapping must omit raw causes and financial data.
+successful commit reports `committed`. Portfolio management can return the retained result
+when the executor confirms commit. An `unknown` outcome needs explicit reconciliation.
+Log primary and secondary errors internally and omit their raw causes from public errors.
 
 These rules govern supported application callbacks. Same-user file manipulation and trusted
-process internals remain outside the boundary. User-facing financial editing, domain-specific mutation services, public
-error mapping and any persistent idempotency requirements belong to later milestones.
+process internals remain outside the boundary. Financial ledger editing and durable
+idempotency are deferred.
 
 ### Back up, restore, or recover a managed database
 
@@ -404,10 +436,8 @@ Pytest can retain an explicit `--basetemp` between runs. Clean up only artifacts
 ### Run Tests
 
 ```cmd
-python -m pytest tests\ -q
+python -m pytest tests\ -q -m "not network"
 ```
-
-Latest local test result: **309 passed, 2 deselected**.
 
 ### Historical Data
 

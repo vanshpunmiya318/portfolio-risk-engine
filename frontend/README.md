@@ -80,11 +80,28 @@ any process tree whose termination the launcher could not confirm.
 - Portfolio Allocation — `/portfolio-allocation`
 - Reports — `/reports`
 
-All seven pages use portfolio-specific APIs. For example, Overview fetches
-`/api/portfolios/{portfolio_id}/summary`. The portfolio ID defaults to `1`. If the configured
-database lacks that portfolio, set `VITE_PORTFOLIO_ID` to an existing ID in your environment or
-an ignored `frontend/.env.local` file, then restart the launcher. Production Vite variables
-are set at build time.
+All seven pages use portfolio-specific APIs. The selector shares one active portfolio
+across them. A valid explicit `VITE_PORTFOLIO_ID` wins at launch; an invalid configured
+value gives an explanation and allows manual selection. If no ID is configured, ID 1
+wins when available, then a sole supported portfolio. Otherwise choose manually. Set
+`VITE_PORTFOLIO_ID` in the environment or in an ignored `frontend/.env.local` file
+and restart the launcher. Selection stays in memory and does not carry into another
+database. Switching portfolios resets page controls, and rename preserves the draft
+and applied settings.
+
+Read-only databases expose selection only. On an opted-in managed database, create
+the first portfolio directly or use **Manage portfolios** for creation and rename.
+Creation supports USD and EUR. If live write availability is uncertain or the
+directory cannot be refreshed, controls explain why writes are unavailable.
+
+When a write loses its acknowledgement, use **Check change status** or
+**Close if unstarted**. If the result is no longer available, review the directory
+and acknowledge the unresolved change before trying a new operation. Refreshing
+the directory does not settle a pending write. The pending marker is stored in the
+current tab across reloads. Closing the tab, clearing storage or using another tab
+limits recovery. A restart rejects old execution tickets but can leave the outcome
+unknown. The guarantee is at most one executor entry per ticket within the issuing
+backend generation. See [local portfolio management](../README.md#manage-local-portfolios).
 
 Holdings preserves nulls as "Unavailable", labels observed-price currencies and historical price dates, and shows all API warnings. The allocation chart uses reported fractional weights, excludes cash, and is withheld for incomplete, missing or inconsistent weights; it never rescales a partial allocation. The backend's default exact-date price policy is displayed; date and price-age controls are not yet exposed in this page.
 
